@@ -6,6 +6,21 @@ export function parseServerDate(value) {
   return new Date(hasZone ? value : `${value}Z`);
 }
 
+export function formatISTDateTime(value) {
+  const date = parseServerDate(value);
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return `${new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  }).format(date)} IST`;
+}
+
 // Value for <input type="datetime-local"> in the user's local time.
 export function toLocalInputValue(value) {
   const d = parseServerDate(value);

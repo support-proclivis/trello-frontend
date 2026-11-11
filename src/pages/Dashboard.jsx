@@ -94,51 +94,60 @@ export default function Dashboard({ user }) {
           <button className="btn" onClick={() => setShowWs(true)}>New workspace</button>
         </div>
         {error && <div className="error">{error}</div>}
-        {workspaces.map((ws) => (
-          <div key={ws.id} className="panel" style={{ marginBottom: 18 }}>
-            <div className="h-row">
-              <div>
-                <strong>{ws.name}</strong> <span className="badge">{ws.code}</span>
-                <div className="muted">{ws.description}</div>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                {ws.role === "workspace_admin" && (
-                  <Link className="btn ghost small" to={`/workspaces/${ws.id}/members`}>Manage members</Link>
-                )}
-                <button className="btn small" onClick={() => setShowBoard(ws.id)}>New board</button>
-              </div>
-            </div>
-            <div className="grid cards-3">
-              {ws.boards.map((b) => (
-                <div key={b.id} className="board-tile" style={{ background: b.background }} onClick={() => nav(`/board/${b.id}`)}>
-                  <div className="board-tile-heading">
-                    <div>{b.name}</div>
-                    <div className="board-tile-actions">
-                      <button className="btn ghost small" onClick={(e) => editBoard(e, b)}>Edit</button>
-                      <button className="btn danger small" onClick={(e) => deleteBoard(e, b)}>Delete</button>
-                    </div>
-                  </div>
-                  <div style={{ fontWeight: 500, fontSize: 12, opacity: 0.9 }}>{b.description}</div>
+        {workspaces.map((ws) => {
+          const canCreateBoard = ["workspace_admin", "board_admin", "member"].includes(ws.role);
+          return (
+            <div key={ws.id} className="panel" style={{ marginBottom: 18 }}>
+              <div className="h-row">
+                <div>
+                  <strong>{ws.name}</strong> <span className="badge">{ws.code}</span>
+                  <div className="muted">{ws.description}</div>
                 </div>
-              ))}
-              {!ws.boards.length && <div className="muted">No boards yet.</div>}
-            </div>
-            <div style={{ marginTop: 14 }}>
-              <div className="muted" style={{ marginBottom: 8 }}>Members</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                {ws.members.map((m) => (
-                  <span key={m.id} className="badge">{m.first_name || m.username} · {m.role.replace("_", " ")}</span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {ws.role === "workspace_admin" && (
+                    <Link className="btn ghost small" to={`/workspaces/${ws.id}/members`}>Manage members</Link>
+                  )}
+                  {canCreateBoard && (
+                    <button className="btn small" onClick={() => setShowBoard(ws.id)}>New board</button>
+                  )}
+                </div>
+              </div>
+              <div className="grid cards-3">
+                {ws.boards.map((b) => (
+                  <div key={b.id} className="board-tile" style={{ background: b.background }} onClick={() => nav(`/board/${b.id}`)}>
+                    <div className="board-tile-heading">
+                      <div>{b.name} {b.visibility === "private" && <span className="badge">Private</span>}</div>
+                      {b.can_manage && (
+                        <div className="board-tile-actions">
+                          <button className="btn ghost small" onClick={(e) => editBoard(e, b)}>Edit</button>
+                          <button className="btn danger small" onClick={(e) => deleteBoard(e, b)}>Delete</button>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ fontWeight: 500, fontSize: 12, opacity: 0.9 }}>{b.description}</div>
+                  </div>
                 ))}
-                <select className="search" defaultValue="" onChange={(e) => { if (e.target.value) addMember(ws.id, e.target.value); e.target.value = ""; }}>
-                  <option value="">Add member</option>
-                  {users.filter((u) => !ws.members.some((m) => m.id === u.id)).map((u) => (
-                    <option key={u.id} value={u.id}>{u.first_name} {u.last_name} ({u.email})</option>
+                {!ws.boards.length && <div className="muted">No boards yet.</div>}
+              </div>
+              <div style={{ marginTop: 14 }}>
+                <div className="muted" style={{ marginBottom: 8 }}>Members</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {ws.members.map((m) => (
+                    <span key={m.id} className="badge">{m.first_name || m.username} · {m.role.replace("_", " ")}</span>
                   ))}
-                </select>
+                  {ws.role === "workspace_admin" && (
+                    <select className="search" defaultValue="" onChange={(e) => { if (e.target.value) addMember(ws.id, e.target.value); e.target.value = ""; }}>
+                      <option value="">Add member</option>
+                      {users.filter((u) => !ws.members.some((m) => m.id === u.id)).map((u) => (
+                        <option key={u.id} value={u.id}>{u.first_name} {u.last_name} ({u.email})</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {showWs && (
@@ -156,6 +165,9 @@ export default function Dashboard({ user }) {
         <div className="modal-backdrop" onClick={closeBoardForm}>
           <form className="modal" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()} onSubmit={createBoard}>
             <h2>{editingBoard ? "Edit board" : "Create board"}</h2>
+            {!editingBoard && workspaces.find((ws) => ws.id === showBoard)?.role !== "workspace_admin" && (
+              <p className="muted">Boards you create here are private and visible only to you.</p>
+            )}
             <div className="field"><label>Name</label><input required value={boardForm.name} onChange={(e) => setBoardForm({ ...boardForm, name: e.target.value })} /></div>
             <div className="field"><label>Description</label><textarea value={boardForm.description} onChange={(e) => setBoardForm({ ...boardForm, description: e.target.value })} /></div>
             <div className="field"><label>Background</label><input value={boardForm.background} onChange={(e) => setBoardForm({ ...boardForm, background: e.target.value })} /></div>

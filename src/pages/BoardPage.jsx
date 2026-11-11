@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiDownload } from "../api";
-import { parseServerDate, toLocalInputValue } from "../dates";
+import { formatISTDateTime, parseServerDate, toLocalInputValue } from "../dates";
 import Topbar from "../components/Topbar.jsx";
 
 const PRIOS = ["critical", "high", "medium", "low", "none"];
@@ -29,10 +29,41 @@ function initials(u) {
 function dueLabel(due) {
   if (!due) return null;
   const d = parseServerDate(due);
+  if (Number.isNaN(d.getTime())) return null;
   const today = new Date();
   const same = d.toDateString() === today.toDateString();
   const overdue = d < today && !same;
-  return { text: d.toLocaleDateString(), overdue, today: same };
+  return {
+    text: d.toLocaleDateString(),
+    shortText: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    overdue,
+    today: same,
+  };
+}
+
+function formatSystemCommentBody(body) {
+  return body.replace(/\bat (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC$/, (_, date, time) => {
+    const formatted = formatISTDateTime(`${date}T${time}:00Z`);
+    return formatted ? `at ${formatted}` : `at ${date} ${time} UTC`;
+  });
+}
+
+function formatActivityMessage(activity) {
+  const actor = activity.actor?.username || "A user";
+  if (activity.action === "update" && activity.field === "status") {
+    if (activity.new_value === "done") return `${actor} marked as completed`;
+    if (activity.old_value === "done" && activity.new_value === "open") {
+      return `${actor} marked as not completed`;
+    }
+  }
+  const oldValue = formatActivityValue(activity.field, activity.old_value);
+  const newValue = formatActivityValue(activity.field, activity.new_value);
+  return `${actor} ${activity.action} ${activity.field} ${oldValue ? `${oldValue} -> ${newValue}` : newValue}`;
+}
+
+function formatActivityValue(field, value) {
+  if (value == null || field !== "description") return value ?? "";
+  return new DOMParser().parseFromString(String(value), "text/html").body.textContent || "";
 }
 
 function AttachmentLink({ attachment }) {
@@ -64,8 +95,9 @@ function AttachmentLink({ attachment }) {
     <a
       className="attachment-item"
       href={objectUrl || undefined}
-      target="_blank"
-      rel="noreferrer"
+      download={!isImage ? attachment.file_name : undefined}
+      target={isImage ? "_blank" : undefined}
+      rel={isImage ? "noreferrer" : undefined}
       onClick={(event) => {
         if (!objectUrl) event.preventDefault();
       }}
@@ -84,6 +116,7 @@ function AttachmentLink({ attachment }) {
 export default function BoardPage({ user }) {
   const { id } = useParams();
   const navigate = useNavigate();
+  const boardSwitcherRef = useRef(null);
   const [board, setBoard] = useState(null);
   const [accessibleBoards, setAccessibleBoards] = useState([]);
   const [boardSwitcherError, setBoardSwitcherError] = useState("");
@@ -101,6 +134,15 @@ export default function BoardPage({ user }) {
   const [report, setReport] = useState(null);
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
+
+  useEffect(() => {
+    if (!showBoardSwitcher) return undefined;
+    function closeOnOutsideClick(event) {
+      if (!boardSwitcherRef.current?.contains(event.target)) setShowBoardSwitcher(false);
+    }
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [showBoardSwitcher]);
 
   async function load() {
     const b = await api(`/api/boards/${id}`);
@@ -195,6 +237,19 @@ export default function BoardPage({ user }) {
     load();
   }
 
+  async function toggleCardCompletion(card) {
+    try {
+      await api(`/api/cards/${card.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ status: card.status === "done" ? "open" : "done" }),
+      });
+      setError("");
+      await load();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function dropList(draggedListId, targetListId, afterTarget) {
     setDragOverListId(null);
     const draggedIndex = lists.findIndex((list) => list.id === draggedListId);
@@ -275,6 +330,7 @@ export default function BoardPage({ user }) {
               onListDrop={(draggedListId, afterTarget) => dropList(draggedListId, list.id, afterTarget)}
               onAdd={(t) => addCard(list.id, t)}
               onOpen={setCard}
+              onToggleCompletion={toggleCardCompletion}
               onDropCard={(cardId) => moveCard(cardId, list.id)}
               onEdit={editList}
               onDelete={deleteList}
@@ -332,7 +388,7 @@ export default function BoardPage({ user }) {
           }
         }}
       />}
-      <div className="board-switcher">
+      <div className="board-switcher" ref={boardSwitcherRef}>
         <button className="btn board-switcher-trigger" onClick={() => setShowBoardSwitcher((open) => !open)}>
           Switch boards <span aria-hidden="true">▾</span>
         </button>
@@ -664,6 +720,7 @@ function ListColumn({
   onListDrop,
   onAdd,
   onOpen,
+  onToggleCompletion,
   onDropCard,
   onEdit,
   onDelete,
@@ -672,11 +729,49 @@ function ListColumn({
   const [title, setTitle] = useState("");
   const [name, setName] = useState(list.name);
   const [editing, setEditing] = useState(false);
+  const [sortOrder, setSortOrder] = useState("due-priority");
+  const [showListMenu, setShowListMenu] = useState(false);
+  const listActionsRef = useRef(null);
   const over = list.wip_limit && list.cards.length >= list.wip_limit;
 
   useEffect(() => {
     setName(list.name);
   }, [list.name]);
+
+  useEffect(() => {
+    if (!showListMenu) return undefined;
+    function closeOnOutsideClick(event) {
+      if (!listActionsRef.current?.contains(event.target)) setShowListMenu(false);
+    }
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [showListMenu]);
+
+  const sortedCards = [...list.cards].sort((a, b) => {
+    if (sortOrder === "default") return 0;
+    if (sortOrder === "name") return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+
+    if (sortOrder === "due-priority") {
+      const aDue = parseServerDate(a.due_date)?.getTime();
+      const bDue = parseServerDate(b.due_date)?.getTime();
+      const aHasDue = Number.isFinite(aDue);
+      const bHasDue = Number.isFinite(bDue);
+      if (aHasDue !== bHasDue) return aHasDue ? -1 : 1;
+      if (aHasDue && aDue !== bDue) return aDue - bDue;
+
+      const aPriority = PRIOS.indexOf((a.priority || "").toLowerCase());
+      const bPriority = PRIOS.indexOf((b.priority || "").toLowerCase());
+      return (aPriority < 0 ? PRIOS.length : aPriority) - (bPriority < 0 ? PRIOS.length : bPriority);
+    }
+
+    const [field, direction] = sortOrder.split(":");
+    const aDate = parseServerDate(a[field])?.getTime();
+    const bDate = parseServerDate(b[field])?.getTime();
+    const aValid = Number.isFinite(aDate);
+    const bValid = Number.isFinite(bDate);
+    if (!aValid || !bValid) return aValid === bValid ? 0 : aValid ? -1 : 1;
+    return direction === "desc" ? bDate - aDate : aDate - bDate;
+  });
 
   async function saveName(e) {
     e.preventDefault();
@@ -733,36 +828,101 @@ function ListColumn({
               >⠿</span>
               <h3>{list.name} <span className="muted">{list.cards.length}{list.wip_limit ? `/${list.wip_limit}` : ""}</span></h3>
             </div>
-            <div className="list-actions">
-              <button className="btn ghost small" onClick={() => setEditing(true)}>Edit</button>
-              <button className="btn danger small" onClick={() => onDelete(list)}>Delete</button>
+            <div className="list-actions" ref={listActionsRef}>
+              <button
+                type="button"
+                className="btn ghost small list-menu-trigger"
+                aria-label={`List actions for ${list.name}`}
+                aria-expanded={showListMenu}
+                aria-haspopup="true"
+                onClick={() => setShowListMenu((open) => !open)}
+              >
+                ⋯
+              </button>
+              {showListMenu && (
+                <div className="list-menu">
+                  <strong>Sort list</strong>
+                  {[
+                    ["due-priority", "Due date (soonest first), then priority"],
+                    ["created_at:desc", "Date created (newest first)"],
+                    ["created_at:asc", "Date created (oldest first)"],
+                    ["due_date:asc", "Due date (soonest first)"],
+                    ["due_date:desc", "Due date (latest first)"],
+                    ["updated_at:desc", "Last updated (newest first)"],
+                    ["updated_at:asc", "Last updated (oldest first)"],
+                    ["name", "Card name (A–Z)"],
+                  ].map(([value, label]) => (
+                    <button
+                      type="button"
+                      key={value}
+                      className={sortOrder === value ? "is-selected" : ""}
+                      aria-pressed={sortOrder === value}
+                      onClick={() => {
+                        setSortOrder(value);
+                        setShowListMenu(false);
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <div className="list-menu-divider" />
+                  <button type="button" onClick={() => { setShowListMenu(false); setEditing(true); }}>Edit list</button>
+                  <button type="button" className="is-danger" onClick={() => { setShowListMenu(false); onDelete(list); }}>Delete list</button>
+                </div>
+              )}
             </div>
           </>
         )}
         {over && <span className="prio high">WIP</span>}
       </div>
       <div className="list-cards">
-        {list.cards.map((c) => (
-          <article
-            key={c.id}
-            className="card"
-            draggable
-            onDragStart={(e) => e.dataTransfer.setData("cardId", String(c.id))}
-            onClick={() => onOpen(c)}
-          >
-            <div className="labels">
-              {c.labels.map((l) => <span key={l.id} className="label" style={{ background: l.color }} />)}
-            </div>
-            <div className="card-title">{c.title}</div>
-            <div className="card-meta">
-              <span className={`prio ${c.priority}`}>{c.priority}</span>
-              <span>{c.card_uid}</span>
-              <div className="avatars">
-                {c.members.map((m) => <div key={m.id} className="avatar-sm">{initials(m)}</div>)}
+        {sortedCards.map((c) => {
+          const due = dueLabel(c.due_date);
+          return (
+            <article
+              key={c.id}
+              className="card"
+              draggable
+              onDragStart={(e) => e.dataTransfer.setData("cardId", String(c.id))}
+              onClick={() => onOpen(c)}
+            >
+              <div className="labels">
+                {c.labels.map((l) => <span key={l.id} className="label" style={{ background: l.color }} />)}
               </div>
-            </div>
-          </article>
-        ))}
+              <div className="card-title-row">
+                <button
+                  type="button"
+                  className={`card-completion${c.status === "done" ? " is-completed" : ""}`}
+                  aria-label={c.status === "done" ? `Mark ${c.title} as not completed` : `Mark ${c.title} as completed`}
+                  aria-pressed={c.status === "done"}
+                  title={c.status === "done" ? "Mark as not completed" : "Mark as completed"}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleCompletion(c);
+                  }}
+                  onDragStart={(event) => event.preventDefault()}
+                  draggable={false}
+                >
+                  {c.status === "done" ? "✓" : ""}
+                </button>
+                <div className="card-title">{c.title}</div>
+              </div>
+              <div className="card-meta">
+                <span className={`prio ${c.priority}`}>{c.priority}</span>
+                <span>{c.card_uid}</span>
+                <div className="avatars">
+                  {c.members.map((m) => <div key={m.id} className="avatar-sm">{initials(m)}</div>)}
+                </div>
+              </div>
+              {due && (
+                <div className={`card-due-date${c.status === "done" ? " is-completed" : due.overdue ? " is-overdue" : due.today ? " is-today" : ""}`}>
+                  <span aria-hidden="true">◷</span>
+                  <span>{due.shortText}</span>
+                </div>
+              )}
+            </article>
+          );
+        })}
       </div>
       <form
         onSubmit={(e) => { e.preventDefault(); onAdd(title); setTitle(""); }}
@@ -779,6 +939,9 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description.replace(/<[^>]+>/g, ""));
   const [comment, setComment] = useState("");
+  const [mentionContext, setMentionContext] = useState(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
   const [checkName, setCheckName] = useState("");
   const [itemName, setItemName] = useState("");
   const [due, setDue] = useState(toLocalInputValue(card.due_date));
@@ -788,6 +951,8 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
   const [showTransfer, setShowTransfer] = useState(false);
   const [transferError, setTransferError] = useState("");
   const [transferring, setTransferring] = useState(false);
+  const [updatingCompletion, setUpdatingCompletion] = useState(false);
+  const commentTextareaRef = useRef(null);
   const watching = card.watchers?.includes(user?.id);
 
   useEffect(() => {
@@ -797,16 +962,12 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
     setDue(toLocalInputValue(card.due_date));
   }, [card.id, card.updated_at]);
 
-  async function save() {
+  async function save(updates) {
+    if (!Object.keys(updates).length) return;
     try {
       await api(`/api/cards/${card.id}`, {
         method: "PUT",
-        body: JSON.stringify({
-          title,
-          description: `<p>${description}</p>`,
-          priority,
-          due_date: due ? new Date(due).toISOString() : null,
-        }),
+        body: JSON.stringify(updates),
       });
       onError("");
       await onChange();
@@ -838,10 +999,56 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
 
   async function sendComment(e) {
     e.preventDefault();
-    if (!comment.trim()) return;
-    await api(`/api/cards/${card.id}/comments`, { method: "POST", body: JSON.stringify({ body: comment }) });
-    setComment("");
-    onChange();
+    if (!comment.trim() || commentSubmitting) return;
+    setCommentSubmitting(true);
+    onError("");
+    try {
+      const result = await api(`/api/cards/${card.id}/comments`, {
+        method: "POST",
+        body: JSON.stringify({ body: comment }),
+      });
+      setComment("");
+      setMentionContext(null);
+      onError(result.email_warnings?.join(" ") || "");
+      await onChange();
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setCommentSubmitting(false);
+    }
+  }
+
+  function updateMentionContext(value, caretPosition) {
+    const textBeforeCaret = value.slice(0, caretPosition);
+    const match = textBeforeCaret.match(/(^|[^\w@])@([A-Za-z0-9_.-]*)$/);
+    if (!match) {
+      setMentionContext(null);
+      setMentionIndex(0);
+      return;
+    }
+    const start = textBeforeCaret.length - match[0].length + match[1].length;
+    setMentionContext({ start, end: caretPosition, query: match[2] });
+    setMentionIndex(0);
+  }
+
+  const mentionSuggestions = mentionContext
+    ? (board.mentionable_users || []).filter((member) => (
+      member.username.toLowerCase().startsWith(mentionContext.query.toLowerCase())
+    )).slice(0, 6)
+    : [];
+
+  function selectMention(member) {
+    if (!mentionContext) return;
+    const before = comment.slice(0, mentionContext.start);
+    const insertion = `@${member.username} `;
+    const updatedComment = before + insertion + comment.slice(mentionContext.end);
+    const nextCaret = before.length + insertion.length;
+    setComment(updatedComment);
+    setMentionContext(null);
+    requestAnimationFrame(() => {
+      commentTextareaRef.current?.focus();
+      commentTextareaRef.current?.setSelectionRange(nextCaret, nextCaret);
+    });
   }
 
   async function addChecklist(e) {
@@ -921,6 +1128,22 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
     onChange();
   }
 
+  async function toggleCompletion() {
+    setUpdatingCompletion(true);
+    onError("");
+    try {
+      await api(`/api/cards/${card.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ status: card.status === "done" ? "open" : "done" }),
+      });
+      await onChange();
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setUpdatingCompletion(false);
+    }
+  }
+
   async function transfer(payload) {
     setTransferring(true);
     setTransferError("");
@@ -957,12 +1180,32 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
         onDrop={handleDrop}
       >
         {error && <div className="error">{error}</div>}
-        <div className="h-row">
-          <div>
-            <div className="muted">{card.card_uid}</div>
-            <h2>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} onBlur={save} style={{ background: "transparent", border: 0, color: "var(--text)", width: "100%", fontWeight: 800 }} />
-            </h2>
+        <div className="h-row modal-card-header">
+          <div className="modal-card-heading">
+            <div className="muted modal-card-id">{card.card_uid}</div>
+            <div className="modal-card-title-row">
+              <button
+                type="button"
+                className={`card-completion modal-card-completion${card.status === "done" ? " is-completed" : ""}`}
+                onClick={toggleCompletion}
+                disabled={updatingCompletion}
+                aria-label={card.status === "done" ? "Mark as not completed" : "Mark as completed"}
+                aria-pressed={card.status === "done"}
+                title={updatingCompletion ? "Updating completion" : card.status === "done" ? "Mark as not completed" : "Mark as completed"}
+              >
+                {card.status === "done" ? "✓" : ""}
+              </button>
+              <textarea
+                className="modal-card-title-input"
+                value={title}
+                rows={2}
+                aria-label="Card title"
+                onChange={(e) => setTitle(e.target.value.replace(/[\r\n]+/g, " "))}
+                onBlur={() => {
+                  if (title !== card.title) void save({ title });
+                }}
+              />
+            </div>
           </div>
           <button className="btn ghost small" onClick={onClose}>Close</button>
         </div>
@@ -970,12 +1213,24 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
           <div>
             <div className="labels" style={{ marginBottom: 10 }}>
               {card.labels.map((l) => <span key={l.id} className="label chip" style={{ background: l.color }}>{l.name}</span>)}
-              {dueInfo && <span className="badge" style={{ color: dueInfo.overdue ? "#fda4af" : "var(--text)" }}>{dueInfo.overdue ? "Overdue" : dueInfo.today ? "Due today" : dueInfo.text}</span>}
+              {dueInfo && (
+                <span className={`badge${card.status === "done" ? " is-completed" : dueInfo.overdue ? " is-overdue" : dueInfo.today ? " is-today" : ""}`}>
+                  {dueInfo.overdue ? "Overdue" : dueInfo.today ? "Due today" : dueInfo.text}
+                </span>
+              )}
               <span className={`prio ${card.priority}`}>{card.priority}</span>
             </div>
             <div className="field">
               <label>Description</label>
-              <textarea value={description} onChange={(e) => setDescription(e.target.value)} onBlur={save} />
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                onBlur={() => {
+                  if (description !== card.description.replace(/<[^>]+>/g, "")) {
+                    void save({ description: `<p>${description}</p>` });
+                  }
+                }}
+              />
             </div>
             <section className="attachment-section">
               <h3>Attachments</h3>
@@ -1025,29 +1280,104 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
             {card.comments.map((cm) => (
               <div key={cm.id} className="comment">
                 <strong>{cm.author.first_name || cm.author.username}</strong>
-                <span className="muted"> · {parseServerDate(cm.created_at)?.toLocaleString()}</span>
-                <div>{cm.body}</div>
+                <span className="muted"> · {formatISTDateTime(cm.created_at)}</span>
+                <div>{cm.is_system ? formatSystemCommentBody(cm.body) : cm.body}</div>
               </div>
             ))}
             <form onSubmit={sendComment} className="field">
-              <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Write a comment, use @username to mention" />
-              <button className="btn small">Comment</button>
+              <div className="mention-input-wrap">
+                <textarea
+                  ref={commentTextareaRef}
+                  value={comment}
+                  onChange={(event) => {
+                    setComment(event.target.value);
+                    updateMentionContext(event.target.value, event.target.selectionStart);
+                  }}
+                  onClick={(event) => updateMentionContext(event.target.value, event.target.selectionStart)}
+                  onBlur={() => setMentionContext(null)}
+                  onKeyUp={(event) => {
+                    if (!["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(event.key)) {
+                      updateMentionContext(event.currentTarget.value, event.currentTarget.selectionStart);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (!mentionContext) return;
+                    if (event.key === "ArrowDown" && mentionSuggestions.length) {
+                      event.preventDefault();
+                      setMentionIndex((index) => (index + 1) % mentionSuggestions.length);
+                    } else if (event.key === "ArrowUp" && mentionSuggestions.length) {
+                      event.preventDefault();
+                      setMentionIndex((index) => (index - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+                    } else if (event.key === "Enter" && mentionSuggestions.length) {
+                      event.preventDefault();
+                      selectMention(mentionSuggestions[mentionIndex]);
+                    } else if (event.key === "Escape") {
+                      setMentionContext(null);
+                    }
+                  }}
+                  placeholder="Write a comment, use @username to mention"
+                  aria-label="Write a comment"
+                  aria-autocomplete="list"
+                  aria-expanded={Boolean(mentionContext)}
+                />
+                {mentionContext && (
+                  <div className="mention-suggestions" role="listbox" aria-label="Member suggestions">
+                    {mentionSuggestions.length ? mentionSuggestions.map((member, index) => (
+                      <button
+                        type="button"
+                        key={member.id}
+                        role="option"
+                        aria-selected={index === mentionIndex}
+                        className={index === mentionIndex ? "is-active" : ""}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => selectMention(member)}
+                      >
+                        <strong>@{member.username}</strong>
+                        {(member.first_name || member.last_name) && (
+                          <span>{[member.first_name, member.last_name].filter(Boolean).join(" ")}</span>
+                        )}
+                      </button>
+                    )) : <div className="mention-suggestions-empty">No matching members</div>}
+                  </div>
+                )}
+              </div>
+              <button className="btn small" disabled={commentSubmitting}>
+                {commentSubmitting ? "Sending..." : "Comment"}
+              </button>
             </form>
             <h3>Activity</h3>
             {card.activities.slice(0, 12).map((a) => (
               <div key={a.id} className="activity">
-                {a.actor?.username} {a.action} {a.field} {a.old_value ? `${a.old_value} -> ${a.new_value}` : a.new_value}
+                <span>{formatActivityMessage(a)}</span>
+                {a.created_at && <span className="activity-time">{formatISTDateTime(a.created_at)}</span>}
               </div>
             ))}
           </div>
           <aside className="side-actions">
             <label className="muted">Priority</label>
-            <select className="search" value={priority} onChange={(e) => { setPriority(e.target.value); }}>
+            <select
+              className="search"
+              value={priority}
+              onChange={(e) => {
+                const nextPriority = e.target.value;
+                setPriority(nextPriority);
+                if (nextPriority !== card.priority) void save({ priority: nextPriority });
+              }}
+            >
               {PRIOS.map((p) => <option key={p}>{p}</option>)}
             </select>
-            <button className="btn small" onClick={save}>Save details</button>
             <label className="muted">Due date</label>
-            <input className="search" type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} onBlur={save} />
+            <input
+              className="search"
+              type="datetime-local"
+              value={due}
+              onChange={(e) => setDue(e.target.value)}
+              onBlur={() => {
+                if (due !== toLocalInputValue(card.due_date)) {
+                  void save({ due_date: due ? new Date(due).toISOString() : null });
+                }
+              }}
+            />
             <label className="muted">Move to</label>
             <select className="search" value={card.list_id} onChange={(e) => moveTo(e.target.value)}>
               {board.lists.filter((l) => !l.archived).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
