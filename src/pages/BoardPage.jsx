@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiDownload } from "../api";
 import { formatISTDateTime, parseServerDate, toLocalInputValue } from "../dates";
@@ -48,7 +48,7 @@ function formatSystemCommentBody(body) {
   });
 }
 
-function formatActivityMessage(activity) {
+function formatActivityMessage(activity, members) {
   const actor = activity.actor?.username || "A user";
   if (activity.action === "update" && activity.field === "status") {
     if (activity.new_value === "done") return `${actor} marked as completed`;
@@ -56,13 +56,21 @@ function formatActivityMessage(activity) {
       return `${actor} marked as not completed`;
     }
   }
-  const oldValue = formatActivityValue(activity.field, activity.old_value);
-  const newValue = formatActivityValue(activity.field, activity.new_value);
+  const oldValue = formatActivityValue(activity.field, activity.old_value, members);
+  const newValue = formatActivityValue(activity.field, activity.new_value, members);
   return `${actor} ${activity.action} ${activity.field} ${oldValue ? `${oldValue} -> ${newValue}` : newValue}`;
 }
 
-function formatActivityValue(field, value) {
-  if (value == null || field !== "description") return value ?? "";
+function formatActivityValue(field, value, members) {
+  if (value == null) return "";
+  if (field === "member") {
+    const memberId = Number(value);
+    if (Number.isInteger(memberId) && memberId > 0) {
+      return members.find((member) => member.id === memberId)?.username || value;
+    }
+    return value;
+  }
+  if (field !== "description") return value;
   return new DOMParser().parseFromString(String(value), "text/html").body.textContent || "";
 }
 
@@ -117,6 +125,7 @@ export default function BoardPage({ user }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const boardSwitcherRef = useRef(null);
+  const memberFilterRef = useRef(null);
   const [board, setBoard] = useState(null);
   const [accessibleBoards, setAccessibleBoards] = useState([]);
   const [boardSwitcherError, setBoardSwitcherError] = useState("");
@@ -124,6 +133,8 @@ export default function BoardPage({ user }) {
   const [filter, setFilter] = useState("");
   const [prio, setPrio] = useState("");
   const [labelId, setLabelId] = useState("");
+  const [memberFilterIds, setMemberFilterIds] = useState([]);
+  const [showMemberFilter, setShowMemberFilter] = useState(false);
   const [card, setCard] = useState(null);
   const [newList, setNewList] = useState("");
   const [error, setError] = useState("");
@@ -134,6 +145,8 @@ export default function BoardPage({ user }) {
   const [report, setReport] = useState(null);
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showArchivedCards, setShowArchivedCards] = useState(false);
+  const [showBoardMembers, setShowBoardMembers] = useState(false);
 
   useEffect(() => {
     if (!showBoardSwitcher) return undefined;
@@ -143,6 +156,15 @@ export default function BoardPage({ user }) {
     document.addEventListener("pointerdown", closeOnOutsideClick);
     return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
   }, [showBoardSwitcher]);
+
+  useEffect(() => {
+    if (!showMemberFilter) return undefined;
+    function closeOnOutsideClick(event) {
+      if (!memberFilterRef.current?.contains(event.target)) setShowMemberFilter(false);
+    }
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [showMemberFilter]);
 
   async function load() {
     const b = await api(`/api/boards/${id}`);
@@ -173,10 +195,11 @@ export default function BoardPage({ user }) {
         if (filter && !(`${c.title} ${c.card_uid}`.toLowerCase().includes(filter.toLowerCase()))) return false;
         if (prio && c.priority !== prio) return false;
         if (labelId && !c.labels.some((x) => String(x.id) === String(labelId))) return false;
+        if (memberFilterIds.length && !c.members.some((member) => memberFilterIds.includes(member.id))) return false;
         return true;
       }),
     }));
-  }, [lists, filter, prio, labelId]);
+  }, [lists, filter, prio, labelId, memberFilterIds]);
 
   async function addList(e) {
     e.preventDefault();
@@ -276,6 +299,40 @@ export default function BoardPage({ user }) {
               <option value="">All labels</option>
               {board.labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
+            <div className="member-filter" ref={memberFilterRef}>
+              <button
+                type="button"
+                className="search member-filter-trigger"
+                aria-label="Filter cards by members"
+                aria-expanded={showMemberFilter}
+                aria-haspopup="listbox"
+                onClick={() => setShowMemberFilter((open) => !open)}
+              >
+                {memberFilterIds.length
+                  ? `${memberFilterIds.length} member${memberFilterIds.length === 1 ? "" : "s"}`
+                  : "All members"}
+                <span aria-hidden="true">{showMemberFilter ? "▴" : "▾"}</span>
+              </button>
+              {showMemberFilter && (
+                <div className="member-filter-options" role="listbox" aria-label="Filter cards by members" aria-multiselectable="true">
+                  {board.members.map((member) => (
+                    <label className="member-filter-option" key={member.id}>
+                      <input
+                        type="checkbox"
+                        checked={memberFilterIds.includes(member.id)}
+                        onChange={() => setMemberFilterIds((selected) => (
+                          selected.includes(member.id)
+                            ? selected.filter((memberId) => memberId !== member.id)
+                            : [...selected, member.id]
+                        ))}
+                      />
+                      <span>{member.first_name || member.username}</span>
+                    </label>
+                  ))}
+                  {!board.members.length && <div className="member-filter-empty">No board members available.</div>}
+                </div>
+              )}
+            </div>
           </>
         }
       />
@@ -283,9 +340,22 @@ export default function BoardPage({ user }) {
         <div className="board-bar">
           <div>
             <h2 style={{ margin: 0 }}>{board.name}</h2>
-            <div className="muted">{board.description} {report ? `· ${report.total} cards · ${report.overdue} overdue` : ""}</div>
+            <div className="muted">
+              {board.description}
+              {report && (
+                <span className="board-summary">
+                  · {report.total} cards · {report.overdue} overdue
+                </span>
+              )}
+            </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            {board.can_manage_board_members && (
+              <button className="btn ghost small" onClick={() => setShowBoardMembers(true)}>Manage members</button>
+            )}
+            {board.can_manage_archived_cards && (
+              <button className="btn ghost small" onClick={() => setShowArchivedCards(true)}>Archived cards</button>
+            )}
             <button className="btn ghost small" onClick={() => setShowImport(true)}>Import Excel</button>
             <button className="btn ghost small" onClick={() => setShowExport(true)}>Export Excel</button>
             <form onSubmit={addList} style={{ display: "flex", gap: 6 }}>
@@ -360,6 +430,20 @@ export default function BoardPage({ user }) {
           onComplete={load}
         />
       )}
+      {showArchivedCards && (
+        <ArchivedCardsModal
+          boardId={board.id}
+          onClose={() => setShowArchivedCards(false)}
+          onRestored={load}
+        />
+      )}
+      {showBoardMembers && (
+        <BoardMembersModal
+          board={board}
+          onClose={() => setShowBoardMembers(false)}
+          onChanged={load}
+        />
+      )}
       {card && <CardModal
         card={card}
         board={board}
@@ -368,8 +452,8 @@ export default function BoardPage({ user }) {
         onError={setCardActionError}
         onClose={() => { setCard(null); setCardActionError(""); }}
         onChange={async () => { await load(); }}
-        onDelete={async () => {
-          await api(`/api/cards/${card.id}`, { method: "DELETE" });
+        onArchive={async () => {
+          await api(`/api/cards/${card.id}/archive`, { method: "POST" });
           setCard(null);
           setCardActionError("");
           await load();
@@ -935,7 +1019,7 @@ function ListColumn({
   );
 }
 
-function CardModal({ card, board, user, error, onError, onClose, onChange, onDelete, onTransferComplete }) {
+function CardModal({ card, board, user, error, onError, onClose, onChange, onArchive, onTransferComplete }) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description.replace(/<[^>]+>/g, ""));
   const [comment, setComment] = useState("");
@@ -949,11 +1033,30 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
+  const [showMemberOptions, setShowMemberOptions] = useState(false);
   const [transferError, setTransferError] = useState("");
   const [transferring, setTransferring] = useState(false);
   const [updatingCompletion, setUpdatingCompletion] = useState(false);
   const commentTextareaRef = useRef(null);
+  const descriptionTextareaRef = useRef(null);
+  const memberSelectRef = useRef(null);
   const watching = card.watchers?.includes(user?.id);
+
+  useEffect(() => {
+    if (!showMemberOptions) return undefined;
+    function closeOnOutsideClick(event) {
+      if (!memberSelectRef.current?.contains(event.target)) setShowMemberOptions(false);
+    }
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [showMemberOptions]);
+
+  useLayoutEffect(() => {
+    const textarea = descriptionTextareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [description]);
 
   useEffect(() => {
     setTitle(card.title);
@@ -976,10 +1079,10 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
     }
   }
 
-  async function removeCard() {
-    if (!window.confirm(`Delete "${card.title}"? This cannot be undone.`)) return;
+  async function archiveCard() {
+    if (!window.confirm(`Archive "${card.title}"? A board admin can restore it later.`)) return;
     try {
-      await onDelete();
+      await onArchive();
     } catch (e) {
       onError(e.message);
     }
@@ -1223,6 +1326,8 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
             <div className="field">
               <label>Description</label>
               <textarea
+                ref={descriptionTextareaRef}
+                className="card-description-input"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 onBlur={() => {
@@ -1276,82 +1381,15 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
               <input className="search" value={checkName} onChange={(e) => setCheckName(e.target.value)} placeholder="Checklist name" />
               <button className="btn small">Add checklist</button>
             </form>
-            <h3>Comments</h3>
-            {card.comments.map((cm) => (
-              <div key={cm.id} className="comment">
-                <strong>{cm.author.first_name || cm.author.username}</strong>
-                <span className="muted"> · {formatISTDateTime(cm.created_at)}</span>
-                <div>{cm.is_system ? formatSystemCommentBody(cm.body) : cm.body}</div>
-              </div>
-            ))}
-            <form onSubmit={sendComment} className="field">
-              <div className="mention-input-wrap">
-                <textarea
-                  ref={commentTextareaRef}
-                  value={comment}
-                  onChange={(event) => {
-                    setComment(event.target.value);
-                    updateMentionContext(event.target.value, event.target.selectionStart);
-                  }}
-                  onClick={(event) => updateMentionContext(event.target.value, event.target.selectionStart)}
-                  onBlur={() => setMentionContext(null)}
-                  onKeyUp={(event) => {
-                    if (!["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(event.key)) {
-                      updateMentionContext(event.currentTarget.value, event.currentTarget.selectionStart);
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (!mentionContext) return;
-                    if (event.key === "ArrowDown" && mentionSuggestions.length) {
-                      event.preventDefault();
-                      setMentionIndex((index) => (index + 1) % mentionSuggestions.length);
-                    } else if (event.key === "ArrowUp" && mentionSuggestions.length) {
-                      event.preventDefault();
-                      setMentionIndex((index) => (index - 1 + mentionSuggestions.length) % mentionSuggestions.length);
-                    } else if (event.key === "Enter" && mentionSuggestions.length) {
-                      event.preventDefault();
-                      selectMention(mentionSuggestions[mentionIndex]);
-                    } else if (event.key === "Escape") {
-                      setMentionContext(null);
-                    }
-                  }}
-                  placeholder="Write a comment, use @username to mention"
-                  aria-label="Write a comment"
-                  aria-autocomplete="list"
-                  aria-expanded={Boolean(mentionContext)}
-                />
-                {mentionContext && (
-                  <div className="mention-suggestions" role="listbox" aria-label="Member suggestions">
-                    {mentionSuggestions.length ? mentionSuggestions.map((member, index) => (
-                      <button
-                        type="button"
-                        key={member.id}
-                        role="option"
-                        aria-selected={index === mentionIndex}
-                        className={index === mentionIndex ? "is-active" : ""}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => selectMention(member)}
-                      >
-                        <strong>@{member.username}</strong>
-                        {(member.first_name || member.last_name) && (
-                          <span>{[member.first_name, member.last_name].filter(Boolean).join(" ")}</span>
-                        )}
-                      </button>
-                    )) : <div className="mention-suggestions-empty">No matching members</div>}
-                  </div>
-                )}
-              </div>
-              <button className="btn small" disabled={commentSubmitting}>
-                {commentSubmitting ? "Sending..." : "Comment"}
-              </button>
-            </form>
-            <h3>Activity</h3>
-            {card.activities.slice(0, 12).map((a) => (
-              <div key={a.id} className="activity">
-                <span>{formatActivityMessage(a)}</span>
-                {a.created_at && <span className="activity-time">{formatISTDateTime(a.created_at)}</span>}
-              </div>
-            ))}
+            <div className="activity-panel">
+              <h3>Activity</h3>
+              {card.activities.slice(0, 12).map((a) => (
+                <div key={a.id} className="activity">
+                  <span>{formatActivityMessage(a, board.members)}</span>
+                  {a.created_at && <span className="activity-time">{formatISTDateTime(a.created_at)}</span>}
+                </div>
+              ))}
+            </div>
           </div>
           <aside className="side-actions">
             <label className="muted">Priority</label>
@@ -1371,7 +1409,14 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
               className="search"
               type="datetime-local"
               value={due}
-              onChange={(e) => setDue(e.target.value)}
+              onChange={(e) => {
+                const nextDue = e.target.value;
+                if (nextDue && nextDue.slice(0, 10) !== due.slice(0, 10)) {
+                  setDue(`${nextDue.slice(0, 10)}T19:00`);
+                } else {
+                  setDue(nextDue);
+                }
+              }}
               onBlur={() => {
                 if (due !== toLocalInputValue(card.due_date)) {
                   void save({ due_date: due ? new Date(due).toISOString() : null });
@@ -1384,11 +1429,39 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
             </select>
             <button className="btn ghost small" onClick={() => { setTransferError(""); setShowTransfer(true); }}>Copy or move to another board</button>
             <label className="muted">Members</label>
-            {board.members.map((m) => (
-              <button key={m.id} className="btn ghost small" onClick={() => toggleMember(m.id)}>
-                {card.members.some((x) => x.id === m.id) ? "Remove" : "Add"} {m.first_name || m.username}
+            <div className="member-select" ref={memberSelectRef}>
+              <button
+                type="button"
+                className="search member-select-trigger"
+                aria-label="Select card members"
+                aria-expanded={showMemberOptions}
+                aria-haspopup="listbox"
+                onClick={() => setShowMemberOptions((open) => !open)}
+              >
+                {card.members.length
+                  ? `${card.members.length} member${card.members.length === 1 ? "" : "s"} selected`
+                  : "Select members"}
+                <span aria-hidden="true">{showMemberOptions ? "▴" : "▾"}</span>
               </button>
-            ))}
+              {showMemberOptions && (
+                <div className="member-select-options" role="listbox" aria-label="Card members" aria-multiselectable="true">
+                  {board.members.map((member) => {
+                    const selected = card.members.some((item) => item.id === member.id);
+                    return (
+                      <label className="member-select-option" key={member.id}>
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => toggleMember(member.id)}
+                        />
+                        <span>{member.first_name || member.username}</span>
+                      </label>
+                    );
+                  })}
+                  {!board.members.length && <div className="member-select-empty">No board members available.</div>}
+                </div>
+              )}
+            </div>
             <label className="muted">Labels</label>
             {board.labels.map((l) => (
               <button key={l.id} className="btn ghost small" style={{ borderColor: l.color }} onClick={() => toggleLabel(l.id)}>
@@ -1396,7 +1469,78 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
               </button>
             ))}
             <button className="btn ghost small" onClick={watch}>{watching ? "Unwatch" : "Watch"}</button>
-            <button className="btn danger small" onClick={removeCard}>Delete card</button>
+            <button className="btn danger small" onClick={archiveCard}>Archive card</button>
+            <div className="comment-panel">
+              <h3>Comments</h3>
+              {card.comments.map((cm) => (
+                <div key={cm.id} className="comment">
+                  <strong>{cm.author.first_name || cm.author.username}</strong>
+                  <span className="muted"> · {formatISTDateTime(cm.created_at)}</span>
+                  <div>{cm.is_system ? formatSystemCommentBody(cm.body) : cm.body}</div>
+                </div>
+              ))}
+              <form onSubmit={sendComment} className="field">
+                <div className="mention-input-wrap">
+                  <textarea
+                    ref={commentTextareaRef}
+                    value={comment}
+                    onChange={(event) => {
+                      setComment(event.target.value);
+                      updateMentionContext(event.target.value, event.target.selectionStart);
+                    }}
+                    onClick={(event) => updateMentionContext(event.target.value, event.target.selectionStart)}
+                    onBlur={() => setMentionContext(null)}
+                    onKeyUp={(event) => {
+                      if (!["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(event.key)) {
+                        updateMentionContext(event.currentTarget.value, event.currentTarget.selectionStart);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (!mentionContext) return;
+                      if (event.key === "ArrowDown" && mentionSuggestions.length) {
+                        event.preventDefault();
+                        setMentionIndex((index) => (index + 1) % mentionSuggestions.length);
+                      } else if (event.key === "ArrowUp" && mentionSuggestions.length) {
+                        event.preventDefault();
+                        setMentionIndex((index) => (index - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+                      } else if (event.key === "Enter" && mentionSuggestions.length) {
+                        event.preventDefault();
+                        selectMention(mentionSuggestions[mentionIndex]);
+                      } else if (event.key === "Escape") {
+                        setMentionContext(null);
+                      }
+                    }}
+                    placeholder="Write a comment, use @username to mention"
+                    aria-label="Write a comment"
+                    aria-autocomplete="list"
+                    aria-expanded={Boolean(mentionContext)}
+                  />
+                  {mentionContext && (
+                    <div className="mention-suggestions" role="listbox" aria-label="Member suggestions">
+                      {mentionSuggestions.length ? mentionSuggestions.map((member, index) => (
+                        <button
+                          type="button"
+                          key={member.id}
+                          role="option"
+                          aria-selected={index === mentionIndex}
+                          className={index === mentionIndex ? "is-active" : ""}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => selectMention(member)}
+                        >
+                          <strong>@{member.username}</strong>
+                          {(member.first_name || member.last_name) && (
+                            <span>{[member.first_name, member.last_name].filter(Boolean).join(" ")}</span>
+                          )}
+                        </button>
+                      )) : <div className="mention-suggestions-empty">No matching members</div>}
+                    </div>
+                  )}
+                </div>
+                <button className="btn small" disabled={commentSubmitting}>
+                  {commentSubmitting ? "Sending..." : "Comment"}
+                </button>
+              </form>
+            </div>
           </aside>
         </div>
       </div>
@@ -1410,6 +1554,207 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onDel
           onSubmit={transfer}
         />
       )}
+    </div>
+  );
+}
+
+function BoardMembersModal({ board, onClose, onChanged }) {
+  const [users, setUsers] = useState([]);
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [selectedRole, setSelectedRole] = useState("member");
+  const [error, setError] = useState("");
+  const [savingUserId, setSavingUserId] = useState(null);
+  const memberIds = new Set(board.members.map((member) => member.id));
+  const availableUsers = users.filter((user) => user.id !== board.owner_id && !memberIds.has(user.id));
+
+  useEffect(() => {
+    api("/api/users")
+      .then(setUsers)
+      .catch((loadError) => setError(loadError.message));
+  }, []);
+
+  async function saveMembership(userId, role) {
+    setSavingUserId(userId);
+    setError("");
+    try {
+      await api(`/api/boards/${board.id}/members/${userId}`, {
+        method: "PUT",
+        body: JSON.stringify({ role }),
+      });
+      await onChanged();
+      return true;
+    } catch (saveError) {
+      setError(saveError.message);
+      return false;
+    } finally {
+      setSavingUserId(null);
+    }
+  }
+
+  async function addMember(event) {
+    event.preventDefault();
+    if (!selectedUserId) return;
+    if (await saveMembership(Number(selectedUserId), selectedRole)) {
+      setSelectedUserId("");
+    }
+  }
+
+  async function removeMember(member) {
+    setSavingUserId(member.id);
+    setError("");
+    try {
+      await api(`/api/boards/${board.id}/members/${member.id}`, { method: "DELETE" });
+      await onChanged();
+    } catch (removeError) {
+      setError(removeError.message);
+    } finally {
+      setSavingUserId(null);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal board-members-modal" role="dialog" aria-modal="true" aria-labelledby="board-members-title" onClick={(event) => event.stopPropagation()}>
+        <div className="h-row">
+          <div>
+            <h2 id="board-members-title">Manage board members</h2>
+            <div className="muted">Users outside the workspace get access to this board only.</div>
+          </div>
+          <button className="btn ghost small" onClick={onClose}>Close</button>
+        </div>
+        {error && <div className="error" role="alert">{error}</div>}
+        <form className="board-member-add" onSubmit={addMember}>
+          <select
+            className="search"
+            aria-label="Select a member to add"
+            value={selectedUserId}
+            onChange={(event) => setSelectedUserId(event.target.value)}
+          >
+            <option value="">Select a user</option>
+            {availableUsers.map((user) => (
+              <option key={user.id} value={user.id}>
+                {user.first_name || user.username} ({user.email})
+              </option>
+            ))}
+          </select>
+          <select
+            className="search"
+            aria-label="Board role"
+            value={selectedRole}
+            onChange={(event) => setSelectedRole(event.target.value)}
+          >
+            <option value="member">Member</option>
+            <option value="viewer">Viewer</option>
+          </select>
+          <button className="btn small" disabled={!selectedUserId || savingUserId !== null}>Add member</button>
+        </form>
+        <div className="board-member-list">
+          {board.members.map((member) => (
+            <div className="board-member-row" key={member.id}>
+              <div>
+                <strong>{member.first_name || member.username}</strong>
+                <div className="muted">{member.email}</div>
+              </div>
+              {member.id === board.owner_id ? (
+                <span className="badge">Board owner</span>
+              ) : (
+                <div className="board-member-actions">
+                  <select
+                    className="search"
+                    aria-label={`Role for ${member.username}`}
+                    value={member.role}
+                    disabled={savingUserId !== null}
+                    onChange={(event) => saveMembership(member.id, event.target.value)}
+                  >
+                    <option value="member">Member</option>
+                    <option value="viewer">Viewer</option>
+                    <option value="board_admin">Board admin</option>
+                  </select>
+                  <button
+                    className="btn ghost small"
+                    disabled={savingUserId !== null}
+                    onClick={() => removeMember(member)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+          {!board.members.length && <div className="muted">No board members have been added.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ArchivedCardsModal({ boardId, onClose, onRestored }) {
+  const [cards, setCards] = useState(null);
+  const [error, setError] = useState("");
+  const [restoringId, setRestoringId] = useState(null);
+
+  async function loadArchivedCards() {
+    setError("");
+    try {
+      setCards(await api(`/api/boards/${boardId}/archived-cards`));
+    } catch (loadError) {
+      setError(loadError.message);
+    }
+  }
+
+  useEffect(() => {
+    loadArchivedCards();
+  }, [boardId]);
+
+  async function restoreCard(card) {
+    setRestoringId(card.id);
+    setError("");
+    try {
+      await api(`/api/cards/${card.id}/restore`, { method: "POST" });
+      await onRestored();
+      await loadArchivedCards();
+    } catch (restoreError) {
+      setError(restoreError.message);
+    } finally {
+      setRestoringId(null);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal archived-cards-modal" role="dialog" aria-modal="true" aria-labelledby="archived-cards-title" onClick={(event) => event.stopPropagation()}>
+        <div className="h-row">
+          <div>
+            <h2 id="archived-cards-title">Archived cards</h2>
+            <div className="muted">Only board admins can view or restore archived cards.</div>
+          </div>
+          <button className="btn ghost small" onClick={onClose}>Close</button>
+        </div>
+        {error && <div className="error" role="alert">{error}</div>}
+        {cards === null ? (
+          !error && <div className="muted">Loading archived cards...</div>
+        ) : cards.length ? (
+          <div className="archived-card-list">
+            {cards.map((card) => (
+              <div className="archived-card-row" key={card.id}>
+                <div>
+                  <strong>{card.title}</strong>
+                  <div className="muted">{card.card_uid} · {card.list_name}</div>
+                </div>
+                <button
+                  className="btn small"
+                  disabled={restoringId !== null}
+                  onClick={() => restoreCard(card)}
+                >
+                  {restoringId === card.id ? "Restoring..." : "Restore"}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="muted archived-cards-empty">No archived cards on this board.</div>
+        )}
+      </div>
     </div>
   );
 }
