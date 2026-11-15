@@ -26,6 +26,19 @@ function initials(u) {
   return ((u?.first_name?.[0] || u?.username?.[0] || "?") + (u?.last_name?.[0] || "")).toUpperCase();
 }
 
+function getBoardTextColor(background) {
+  const hex = background?.match(/^#([\da-f]{3}|[\da-f]{6})$/i)?.[1];
+  if (!hex) return "#fff";
+
+  const value = hex.length === 3 ? [...hex].map((digit) => digit + digit).join("") : hex;
+  const channels = [0, 2, 4].map((index) => parseInt(value.slice(index, index + 2), 16) / 255);
+  const luminance = channels
+    .map((channel) => (channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4))
+    .reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0);
+
+  return luminance > 0.179 ? "#111" : "#fff";
+}
+
 function dueLabel(due) {
   if (!due) return null;
   const d = parseServerDate(due);
@@ -336,7 +349,13 @@ export default function BoardPage({ user }) {
           </>
         }
       />
-      <div className="board-page" style={{ background: `linear-gradient(180deg, ${board.background}, var(--board-page-end))` }}>
+      <div
+        className="board-page"
+        style={{
+          background: `linear-gradient(180deg, ${board.background}, var(--board-page-end))`,
+          "--board-text-color": getBoardTextColor(board.background),
+        }}
+      >
         <div className="board-bar">
           <div>
             <h2 style={{ margin: 0 }}>{board.name}</h2>
