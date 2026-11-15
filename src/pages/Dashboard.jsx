@@ -124,7 +124,10 @@ export default function Dashboard({ user }) {
                         </div>
                       )}
                     </div>
-                    <div style={{ fontWeight: 500, fontSize: 12, opacity: 0.9 }}>{b.description}</div>
+                    <div className="board-tile-details">
+                      {b.description && <div className="board-tile-description">{b.description}</div>}
+                      <span className="board-tile-count">{b.card_count} {b.card_count === 1 ? "card" : "cards"}</span>
+                    </div>
                   </div>
                 ))}
                 {!ws.boards.length && <div className="muted">No boards yet.</div>}
