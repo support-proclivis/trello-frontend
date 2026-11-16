@@ -184,6 +184,48 @@ a { color: inherit; text-decoration: none; }
   display: inline-block; padding: 3px 7px; border: 1px solid rgba(255, 255, 255, 0.45);
   border-radius: 999px; background: rgba(0, 0, 0, 0.12); color: white; font-size: 11px;
 }
+.workspace-card-search { width: min(620px, 100%); }
+.workspace-card-search h2 { margin: 0 0 16px; }
+.workspace-card-search-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 0.6fr); gap: 12px; }
+.workspace-card-search-fields .field { margin-bottom: 12px; }
+.member-dashboard-page { max-width: 1280px; }
+.member-dashboard-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }
+.member-dashboard-heading h1 { margin: 0; }
+.member-dashboard-heading p { margin: 5px 0 0; }
+.member-dashboard-controls {
+  display: grid; grid-template-columns: minmax(240px, 1fr) repeat(2, minmax(150px, 190px)) auto;
+  align-items: end; gap: 12px; margin-bottom: 18px;
+}
+.member-dashboard-controls label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.member-dashboard-controls label span { color: var(--muted); font-size: 12px; font-weight: 600; }
+.member-dashboard-controls .search { width: 100%; min-width: 0; min-height: 40px; }
+.member-task-reset { min-height: 40px; white-space: nowrap; }
+.member-dashboard-error { margin: 0 0 12px; }
+.member-task-resource { padding: 0; overflow: hidden; }
+.member-task-resource-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; }
+.member-task-resource-heading h2 { margin: 0; font-size: 18px; }
+.member-task-message { padding: 10px 16px 18px; }
+.member-task-table-wrap { overflow-x: auto; }
+.member-task-table { width: 100%; min-width: 760px; border-collapse: collapse; text-align: left; }
+.member-task-table th, .member-task-table td { padding: 11px 12px; border-top: 1px solid var(--line); vertical-align: middle; }
+.member-task-table th { background: var(--panel-2); color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.member-task-table td { font-size: 13px; }
+.member-task-title { padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; text-align: left; cursor: pointer; }
+.member-task-title:hover { text-decoration: underline; }
+.member-task-title:disabled { opacity: 0.6; cursor: wait; }
+.member-task-due { white-space: nowrap; }
+.member-task-due.is-overdue { border-color: transparent; background: rgba(239, 68, 68, 0.16); color: #dc2626; }
+.member-task-due.is-today { border-color: transparent; background: rgba(245, 158, 11, 0.2); color: #b45309; }
+.member-task-due.is-no_date { color: var(--muted); }
+.member-card-status { display: inline-block; margin: 4px 0; width: fit-content; }
+.workspace-card-search-actions { display: flex; gap: 8px; }
+.workspace-card-search-results { max-height: 45vh; overflow-y: auto; margin-top: 18px; }
+.workspace-card-search-result {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; padding: 10px;
+  border: 1px solid var(--line); border-radius: 9px; margin-bottom: 8px; background: var(--inset-bg);
+  color: var(--text); text-align: left; cursor: pointer;
+}
+.workspace-card-search-result:hover { border-color: var(--accent); }
 .muted { color: var(--muted); }
 .h-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .avatar, .avatar-sm {
@@ -441,6 +483,8 @@ a { color: inherit; text-decoration: none; }
   .topbar { height: auto; min-height: 64px; flex-wrap: wrap; gap: 8px; padding: 8px 14px; }
   .top-actions { flex-wrap: wrap; justify-content: flex-end; }
   .transfer-footer { align-items: flex-start; flex-direction: column; }
+  .member-dashboard-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .member-task-search { grid-column: 1 / -1; }
 }
 
 @media (max-width: 560px) {
@@ -451,4 +495,7 @@ a { color: inherit; text-decoration: none; }
   .board-member-add { grid-template-columns: 1fr; }
   .board-member-row { align-items: flex-start; flex-direction: column; }
   .board-switcher { right: 12px; bottom: 12px; }
+  .member-dashboard-controls { grid-template-columns: 1fr; }
+  .member-task-search { grid-column: auto; }
+  .member-dashboard-controls .btn { width: 100%; }
 }

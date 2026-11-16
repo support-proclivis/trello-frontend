@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, setToken } from "../api";
+import { sortAlphabetically } from "../sorting.js";
 import { getThemePreference, setThemePreference } from "../theme.js";
 
 export default function Topbar({ user, extra }) {
@@ -34,9 +35,13 @@ export default function Topbar({ user, extra }) {
           value={theme}
           onChange={changeTheme}
         >
-          <option value="system">System</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
+          {sortAlphabetically([
+            { value: "system", label: "System" },
+            { value: "light", label: "Light" },
+            { value: "dark", label: "Dark" },
+          ], (option) => option.label).map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
         </select>
         <Link className="nav-link" to="/">Boards</Link>
         <Link className="nav-link" to="/profile">{user?.first_name || user?.username}</Link>
