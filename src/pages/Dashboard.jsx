@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { sortAlphabetically } from "../sorting.js";
 import Topbar from "../components/Topbar.jsx";
+import MemberDashboard from "./MemberDashboard.jsx";
 
 export default function Dashboard({ user }) {
   const nav = useNavigate();
@@ -11,16 +13,34 @@ export default function Dashboard({ user }) {
   const [showWs, setShowWs] = useState(false);
   const [showBoard, setShowBoard] = useState(null);
   const [editingBoard, setEditingBoard] = useState(null);
+  const [searchWorkspace, setSearchWorkspace] = useState(null);
+  const [cardSearchQuery, setCardSearchQuery] = useState("");
+  const [cardSearchMemberId, setCardSearchMemberId] = useState("");
+  const [cardSearchResults, setCardSearchResults] = useState(null);
+  const [cardSearchTotal, setCardSearchTotal] = useState(0);
+  const [cardSearchLoading, setCardSearchLoading] = useState(false);
+  const [cardSearchError, setCardSearchError] = useState("");
   const [form, setForm] = useState({ name: "", code: "", description: "" });
   const [boardForm, setBoardForm] = useState({ name: "", description: "", background: "#0d7377" });
   const [error, setError] = useState("");
+  const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
 
   async function load() {
-    const [ws, us] = await Promise.all([api("/api/workspaces"), api("/api/users")]);
+    const ws = await api("/api/workspaces");
     setWorkspaces(ws);
-    setUsers(us);
+    setWorkspacesLoaded(true);
+    if (ws.some((workspace) => workspace.is_admin)) {
+      setUsers(await api("/api/users"));
+    } else {
+      setUsers([]);
+    }
   }
-  useEffect(() => { load().catch((e) => setError(e.message)); }, []);
+  useEffect(() => {
+    load().catch((e) => {
+      setError(e.message);
+      setWorkspacesLoaded(true);
+    });
+  }, []);
 
   async function createWorkspace(e) {
     e.preventDefault();
@@ -82,6 +102,60 @@ export default function Dashboard({ user }) {
     load();
   }
 
+  function openCardSearch(ws) {
+    setSearchWorkspace(ws);
+    setCardSearchQuery("");
+    setCardSearchMemberId("");
+    setCardSearchResults(null);
+    setCardSearchTotal(0);
+    setCardSearchError("");
+  }
+
+  async function searchCards(e) {
+    e.preventDefault();
+    const query = cardSearchQuery.trim();
+    if (!query && !cardSearchMemberId) {
+      setCardSearchError("Enter a card number or title, or select a member.");
+      return;
+    }
+
+    const params = new URLSearchParams();
+    if (query) params.set("q", query);
+    if (cardSearchMemberId) params.set("member_id", cardSearchMemberId);
+    setCardSearchLoading(true);
+    setCardSearchError("");
+    try {
+      const response = await api(`/api/workspaces/${searchWorkspace.id}/cards/search?${params}`);
+      setCardSearchResults(response.results);
+      setCardSearchTotal(response.total);
+    } catch (e) {
+      setCardSearchError(e.message);
+    } finally {
+      setCardSearchLoading(false);
+    }
+  }
+
+  const hasWorkspaceAdminRole = workspaces.some((ws) =>
+    ["workspace_admin", "board_admin"].includes(ws.role),
+  );
+  const hasMemberWorkspaceRole = workspaces.some((ws) => ws.role === "member");
+  const useMemberDashboard = workspacesLoaded
+    && workspaces.length > 0
+    && (hasMemberWorkspaceRole || (!hasWorkspaceAdminRole && workspaces.every((ws) => !ws.is_admin)));
+
+  if (useMemberDashboard) {
+    return <MemberDashboard user={user} />;
+  }
+
+  if (!workspacesLoaded) {
+    return (
+      <div className="app-shell">
+        <Topbar user={user} />
+        <div className="page muted">Loading workspaces...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <Topbar user={user} />
@@ -105,7 +179,10 @@ export default function Dashboard({ user }) {
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   {ws.role === "workspace_admin" && (
-                    <Link className="btn ghost small" to={`/workspaces/${ws.id}/members`}>Manage members</Link>
+                    <>
+                      <button className="btn ghost small" onClick={() => openCardSearch(ws)}>Search cards</button>
+                      <Link className="btn ghost small" to={`/workspaces/${ws.id}/members`}>Manage members</Link>
+                    </>
                   )}
                   {canCreateBoard && (
                     <button className="btn small" onClick={() => setShowBoard(ws.id)}>New board</button>
@@ -126,7 +203,9 @@ export default function Dashboard({ user }) {
                     </div>
                     <div className="board-tile-details">
                       {b.description && <div className="board-tile-description">{b.description}</div>}
-                      <span className="board-tile-count">{b.card_count} {b.card_count === 1 ? "card" : "cards"}</span>
+                      <span className="board-tile-count">
+                        {b.card_count} {b.card_count === 1 ? "card" : "cards"} · {b.overdue_count} overdue
+                      </span>
                     </div>
                   </div>
                 ))}
@@ -141,7 +220,10 @@ export default function Dashboard({ user }) {
                   {ws.role === "workspace_admin" && (
                     <select className="search" defaultValue="" onChange={(e) => { if (e.target.value) addMember(ws.id, e.target.value); e.target.value = ""; }}>
                       <option value="">Add member</option>
-                      {users.filter((u) => !ws.members.some((m) => m.id === u.id)).map((u) => (
+                      {sortAlphabetically(
+                        users.filter((u) => !ws.members.some((m) => m.id === u.id)),
+                        (u) => [u.first_name, u.last_name].filter(Boolean).join(" ") || u.username,
+                      ).map((u) => (
                         <option key={u.id} value={u.id}>{u.first_name} {u.last_name} ({u.email})</option>
                       ))}
                     </select>
@@ -152,6 +234,82 @@ export default function Dashboard({ user }) {
           );
         })}
       </div>
+
+      {searchWorkspace && (
+        <div className="modal-backdrop" onClick={() => setSearchWorkspace(null)}>
+          <div
+            className="modal workspace-card-search"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workspace-card-search-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="workspace-card-search-title">Search cards in {searchWorkspace.name}</h2>
+            <form onSubmit={searchCards}>
+              <div className="workspace-card-search-fields">
+                <div className="field">
+                  <label htmlFor="card-search-query">Card number or title</label>
+                  <input
+                    id="card-search-query"
+                    value={cardSearchQuery}
+                    onChange={(e) => setCardSearchQuery(e.target.value)}
+                    placeholder="For example, CARD-123 or release plan"
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="card-search-member">Assigned member</label>
+                  <select
+                    id="card-search-member"
+                    className="search"
+                    value={cardSearchMemberId}
+                    onChange={(e) => setCardSearchMemberId(e.target.value)}
+                  >
+                    <option value="">All members</option>
+                    {sortAlphabetically(
+                      searchWorkspace.members.filter((member) => member.status === "active"),
+                      (member) => [member.first_name, member.last_name].filter(Boolean).join(" ") || member.username,
+                    ).map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {[member.first_name, member.last_name].filter(Boolean).join(" ") || member.username}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="workspace-card-search-actions">
+                <button className="btn" type="submit" disabled={cardSearchLoading}>
+                  {cardSearchLoading ? "Searching..." : "Search"}
+                </button>
+                <button className="btn ghost" type="button" onClick={() => setSearchWorkspace(null)}>Close</button>
+              </div>
+            </form>
+            {cardSearchError && <div className="error" role="alert">{cardSearchError}</div>}
+            {cardSearchResults && (
+              <div className="workspace-card-search-results" aria-live="polite">
+                <div className="muted" style={{ marginBottom: 8 }}>
+                  {cardSearchTotal} {cardSearchTotal === 1 ? "card found" : "cards found"}
+                  {cardSearchTotal > cardSearchResults.length && `; showing first ${cardSearchResults.length}`}
+                </div>
+                {cardSearchResults.map((card) => (
+                  <button
+                    key={card.id}
+                    type="button"
+                    className="workspace-card-search-result"
+                    onClick={() => {
+                      setSearchWorkspace(null);
+                      nav(`/board/${card.board_id}`, { state: { openCardId: card.id } });
+                    }}
+                  >
+                    <span><strong>{card.title}</strong> <span className="muted">{card.card_uid}</span></span>
+                    <span className="muted">{card.board_name} · {card.list_name}</span>
+                  </button>
+                ))}
+                {!cardSearchResults.length && <div className="muted">No matching cards found.</div>}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showWs && (
         <div className="modal-backdrop" onClick={() => setShowWs(false)}>

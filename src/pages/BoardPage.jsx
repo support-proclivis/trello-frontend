@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, apiDownload } from "../api";
 import { formatISTDateTime, parseServerDate, toLocalInputValue } from "../dates";
+import { sortAlphabetically } from "../sorting.js";
 import Topbar from "../components/Topbar.jsx";
 
 const PRIOS = ["critical", "high", "medium", "low", "none"];
@@ -21,6 +22,17 @@ const EXPORT_COLUMNS = [
   { key: "updated_at", label: "Updated" },
   { key: "location", label: "Location" },
 ];
+const DATE_FIELDS = sortAlphabetically([
+  { value: "due_date", label: "Due date" },
+  { value: "start_date", label: "Start date" },
+  { value: "created_at", label: "Created date" },
+  { value: "updated_at", label: "Updated date" },
+], (field) => field.label);
+const BOARD_MEMBER_ROLES = sortAlphabetically([
+  { value: "member", label: "Member" },
+  { value: "viewer", label: "Viewer" },
+  { value: "board_admin", label: "Board admin" },
+], (role) => role.label);
 
 function initials(u) {
   return ((u?.first_name?.[0] || u?.username?.[0] || "?") + (u?.last_name?.[0] || "")).toUpperCase();
@@ -136,6 +148,7 @@ function AttachmentLink({ attachment }) {
 
 export default function BoardPage({ user }) {
   const { id } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const boardSwitcherRef = useRef(null);
   const memberFilterRef = useRef(null);
@@ -180,9 +193,22 @@ export default function BoardPage({ user }) {
   }, [showMemberFilter]);
 
   async function load() {
-    const b = await api(`/api/boards/${id}`);
+    const [b, boardReport] = await Promise.all([
+      api(`/api/boards/${id}`),
+      api(`/api/reports/board/${id}`),
+    ]);
     setBoard(b);
-    if (card) {
+    setReport(boardReport);
+    const requestedCardId = location.state?.openCardId;
+    if (requestedCardId != null) {
+      const requestedCard = b.lists.flatMap((list) => list.cards).find((item) => item.id === Number(requestedCardId));
+      if (requestedCard) {
+        setCard(requestedCard);
+      } else {
+        setError("The searched card is no longer available on this board.");
+      }
+      navigate(`${location.pathname}${location.search}${location.hash}`, { replace: true, state: null });
+    } else if (card) {
       const fresh = b.lists.flatMap((l) => l.cards).find((c) => c.id === card.id);
       if (fresh) setCard(fresh);
     }
@@ -197,7 +223,6 @@ export default function BoardPage({ user }) {
       })
       .catch((e) => setBoardSwitcherError(e.message));
     api("/api/notifications").then(setNotes).catch(() => {});
-    api(`/api/reports/board/${id}`).then(setReport).catch(() => {});
   }, [id]);
 
   const lists = board?.lists || [];
@@ -306,11 +331,11 @@ export default function BoardPage({ user }) {
             <input className="search" placeholder="Filter cards" value={filter} onChange={(e) => setFilter(e.target.value)} />
             <select className="search" value={prio} onChange={(e) => setPrio(e.target.value)}>
               <option value="">All priorities</option>
-              {PRIOS.map((p) => <option key={p} value={p}>{p}</option>)}
+              {sortAlphabetically(PRIOS).map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
             <select className="search" value={labelId} onChange={(e) => setLabelId(e.target.value)}>
               <option value="">All labels</option>
-              {board.labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              {sortAlphabetically(board.labels, (label) => label.name).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
             <div className="member-filter" ref={memberFilterRef}>
               <button
@@ -328,7 +353,7 @@ export default function BoardPage({ user }) {
               </button>
               {showMemberFilter && (
                 <div className="member-filter-options" role="listbox" aria-label="Filter cards by members" aria-multiselectable="true">
-                  {board.members.map((member) => (
+                  {sortAlphabetically(board.members, (member) => member.first_name || member.username).map((member) => (
                     <label className="member-filter-option" key={member.id}>
                       <input
                         type="checkbox"
@@ -500,7 +525,7 @@ export default function BoardPage({ user }) {
             <strong>Accessible boards</strong>
             {boardSwitcherError && <span className="error">{boardSwitcherError}</span>}
             {accessibleBoards.length === 0 && <span className="muted">No boards available</span>}
-            {accessibleBoards.map((item) => (
+            {sortAlphabetically(accessibleBoards, (item) => item.name).map((item) => (
               <button
                 key={item.id}
                 className={`board-switcher-option${String(item.id) === String(id) ? " is-current" : ""}`}
@@ -609,10 +634,7 @@ function BoardExportModal({ boardId, boardName, lists, allLists, filter, priorit
             <label>
               <span>Date to filter</span>
               <select value={dateField} onChange={(event) => setDateField(event.target.value)}>
-                <option value="due_date">Due date</option>
-                <option value="start_date">Start date</option>
-                <option value="created_at">Created date</option>
-                <option value="updated_at">Updated date</option>
+                {DATE_FIELDS.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
               </select>
             </label>
             <label>
@@ -1038,7 +1060,7 @@ function ListColumn({
   );
 }
 
-function CardModal({ card, board, user, error, onError, onClose, onChange, onArchive, onTransferComplete }) {
+export function CardModal({ card, board, user, error, onError, onClose, onChange, onArchive, onTransferComplete, showStatus = false }) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description.replace(/<[^>]+>/g, ""));
   const [comment, setComment] = useState("");
@@ -1154,9 +1176,12 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onArc
   }
 
   const mentionSuggestions = mentionContext
-    ? (board.mentionable_users || []).filter((member) => (
-      member.username.toLowerCase().startsWith(mentionContext.query.toLowerCase())
-    )).slice(0, 6)
+    ? sortAlphabetically(
+      (board.mentionable_users || []).filter((member) => (
+        member.username.toLowerCase().startsWith(mentionContext.query.toLowerCase())
+      )),
+      (member) => member.username,
+    ).slice(0, 6)
     : [];
 
   function selectMention(member) {
@@ -1305,6 +1330,7 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onArc
         <div className="h-row modal-card-header">
           <div className="modal-card-heading">
             <div className="muted modal-card-id">{card.card_uid}</div>
+            {showStatus && <span className="badge member-card-status">Status: {card.status || "Open"}</span>}
             <div className="modal-card-title-row">
               <button
                 type="button"
@@ -1421,7 +1447,7 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onArc
                 if (nextPriority !== card.priority) void save({ priority: nextPriority });
               }}
             >
-              {PRIOS.map((p) => <option key={p}>{p}</option>)}
+              {sortAlphabetically(PRIOS).map((p) => <option key={p}>{p}</option>)}
             </select>
             <label className="muted">Due date</label>
             <input
@@ -1444,7 +1470,8 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onArc
             />
             <label className="muted">Move to</label>
             <select className="search" value={card.list_id} onChange={(e) => moveTo(e.target.value)}>
-              {board.lists.filter((l) => !l.archived).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              {sortAlphabetically(board.lists.filter((l) => !l.archived), (list) => list.name)
+                .map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
             <button className="btn ghost small" onClick={() => { setTransferError(""); setShowTransfer(true); }}>Copy or move to another board</button>
             <label className="muted">Members</label>
@@ -1464,7 +1491,7 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onArc
               </button>
               {showMemberOptions && (
                 <div className="member-select-options" role="listbox" aria-label="Card members" aria-multiselectable="true">
-                  {board.members.map((member) => {
+                  {sortAlphabetically(board.members, (member) => member.first_name || member.username).map((member) => {
                     const selected = card.members.some((item) => item.id === member.id);
                     return (
                       <label className="member-select-option" key={member.id}>
@@ -1482,7 +1509,7 @@ function CardModal({ card, board, user, error, onError, onClose, onChange, onArc
               )}
             </div>
             <label className="muted">Labels</label>
-            {board.labels.map((l) => (
+            {sortAlphabetically(board.labels, (label) => label.name).map((l) => (
               <button key={l.id} className="btn ghost small" style={{ borderColor: l.color }} onClick={() => toggleLabel(l.id)}>
                 {card.labels.some((x) => x.id === l.id) ? "Remove" : "Add"} {l.name}
               </button>
@@ -1584,7 +1611,10 @@ function BoardMembersModal({ board, onClose, onChanged }) {
   const [error, setError] = useState("");
   const [savingUserId, setSavingUserId] = useState(null);
   const memberIds = new Set(board.members.map((member) => member.id));
-  const availableUsers = users.filter((user) => user.id !== board.owner_id && !memberIds.has(user.id));
+  const availableUsers = sortAlphabetically(
+    users.filter((user) => user.id !== board.owner_id && !memberIds.has(user.id)),
+    (user) => `${user.first_name || user.username} (${user.email})`,
+  );
 
   useEffect(() => {
     api("/api/users")
@@ -1662,8 +1692,8 @@ function BoardMembersModal({ board, onClose, onChanged }) {
             value={selectedRole}
             onChange={(event) => setSelectedRole(event.target.value)}
           >
-            <option value="member">Member</option>
-            <option value="viewer">Viewer</option>
+            {BOARD_MEMBER_ROLES.filter((role) => role.value !== "board_admin")
+              .map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
           </select>
           <button className="btn small" disabled={!selectedUserId || savingUserId !== null}>Add member</button>
         </form>
@@ -1685,9 +1715,7 @@ function BoardMembersModal({ board, onClose, onChanged }) {
                     disabled={savingUserId !== null}
                     onChange={(event) => saveMembership(member.id, event.target.value)}
                   >
-                    <option value="member">Member</option>
-                    <option value="viewer">Viewer</option>
-                    <option value="board_admin">Board admin</option>
+                    {BOARD_MEMBER_ROLES.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
                   </select>
                   <button
                     className="btn ghost small"
@@ -1842,21 +1870,26 @@ function CardTransferModal({ card, currentBoardId, error, busy, onClose, onSubmi
             <div className="field">
               <label>Action</label>
               <select className="search" value={mode} onChange={(e) => setMode(e.target.value)}>
-                <option value="copy">Copy card</option>
-                <option value="move">Move card</option>
+                {sortAlphabetically([
+                  { value: "copy", label: "Copy card" },
+                  { value: "move", label: "Move card" },
+                ], (option) => option.label).map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
             </div>
             <div className="field">
               <label>Destination board</label>
               <select className="search" value={targetBoardId} onChange={(e) => selectBoard(e.target.value)}>
-                {boards.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                {sortAlphabetically(boards, (item) => item.name).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </div>
             <div className="transfer-fields">
               <div className="field">
                 <label>Destination column</label>
                 <select className="search" value={targetListId} onChange={(e) => setTargetListId(e.target.value)}>
-                  {(targetBoard?.lists || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  {sortAlphabetically(targetBoard?.lists || [], (item) => item.name)
+                    .map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               </div>
               <div className="field">

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { parseServerDate } from "../dates";
+import { sortAlphabetically } from "../sorting.js";
 import Topbar from "../components/Topbar.jsx";
 
 const WORKSPACE_ROLES = ["workspace_admin", "board_admin", "member", "guest", "viewer"];
@@ -136,7 +137,7 @@ export default function Members({ user }) {
             <div className="field">
               <label htmlFor="invite-role">Workspace role</label>
               <select id="invite-role" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>
-                {WORKSPACE_ROLES.map((role) => <option key={role} value={role}>{roleName(role)}</option>)}
+                {sortAlphabetically(WORKSPACE_ROLES, roleName).map((role) => <option key={role} value={role}>{roleName(role)}</option>)}
               </select>
             </div>
             <button className="btn">Create invite &amp; open Gmail</button>
@@ -171,7 +172,7 @@ export default function Members({ user }) {
                           disabled={isOwner}
                           onChange={(e) => updateWorkspaceMember(member.id, { role: e.target.value })}
                         >
-                          {WORKSPACE_ROLES.map((role) => <option key={role} value={role}>{roleName(role)}</option>)}
+                          {sortAlphabetically(WORKSPACE_ROLES, roleName).map((role) => <option key={role} value={role}>{roleName(role)}</option>)}
                         </select>
                       </td>
                       <td><span className={`badge ${member.status === "active" ? "status-active" : "status-inactive"}`}>{member.status}</span></td>
@@ -235,7 +236,7 @@ export default function Members({ user }) {
                               onChange={(e) => updateBoardAccess(board.id, member.id, e.target.value)}
                             >
                               <option value="inherit">Inherit workspace role</option>
-                              {BOARD_ROLES.map((role) => <option key={role} value={role}>{roleName(role)}</option>)}
+                              {sortAlphabetically(BOARD_ROLES, roleName).map((role) => <option key={role} value={role}>{roleName(role)}</option>)}
                             </select>
                             {member.id === board.owner_id && <span className="muted"> · Board owner</span>}
                           </td>
