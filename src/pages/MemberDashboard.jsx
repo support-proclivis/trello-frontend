@@ -25,7 +25,7 @@ function displayDueDate(value) {
   }).format(date);
 }
 
-export default function MemberDashboard({ user }) {
+export default function MemberDashboard({ user, viewedMember = null, memberViewExtra = null }) {
   const [cards, setCards] = useState([]);
   const [query, setQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -64,6 +64,7 @@ export default function MemberDashboard({ user }) {
       if (query.trim()) params.set("q", query.trim());
       if (dateFrom) params.set("due_date_from", dateFrom);
       if (dateTo) params.set("due_date_to", dateTo);
+      if (viewedMember?.id) params.set("view_as_member_id", String(viewedMember.id));
       if (includeExcludedLists) params.set("include_excluded_lists", "true");
       const search = params.toString();
       try {
@@ -80,11 +81,14 @@ export default function MemberDashboard({ user }) {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [query, dateFrom, dateTo, refreshKey, includeExcludedLists]);
+  }, [query, dateFrom, dateTo, refreshKey, includeExcludedLists, viewedMember?.id]);
 
   useEffect(() => {
     let active = true;
-    api("/api/accessible-boards")
+    const params = viewedMember?.id
+      ? `?view_as_member_id=${encodeURIComponent(viewedMember.id)}`
+      : "";
+    api(`/api/accessible-boards${params}`)
       .then((boards) => {
         if (!active) return;
         const names = [...new Set(boards.flatMap((board) => (
@@ -102,7 +106,7 @@ export default function MemberDashboard({ user }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [viewedMember?.id]);
 
   useEffect(() => {
     if (!showListFilter) return undefined;
@@ -114,7 +118,10 @@ export default function MemberDashboard({ user }) {
   }, [showListFilter]);
 
   async function loadSelectedBoard(boardId, cardId) {
-    const board = await api(`/api/boards/${boardId}`);
+    const params = viewedMember?.id
+      ? `?view_as_member_id=${encodeURIComponent(viewedMember.id)}`
+      : "";
+    const board = await api(`/api/boards/${boardId}${params}`);
     const card = board.lists.flatMap((list) => list.cards).find((item) => item.id === cardId);
     if (!card) throw new Error("This card is no longer available.");
     setSelectedCard({ board, card });
@@ -167,7 +174,10 @@ export default function MemberDashboard({ user }) {
     setNewCardTitle("");
     setNewCardDescription("");
     try {
-      const boards = await api("/api/accessible-boards");
+      const params = viewedMember?.id
+        ? `?view_as_member_id=${encodeURIComponent(viewedMember.id)}`
+        : "";
+      const boards = await api(`/api/accessible-boards${params}`);
       const writableBoards = boards.filter((board) => board.writable && board.lists?.length);
       setCreateBoards(writableBoards);
       setCreateBoardId(String(writableBoards[0]?.id || ""));
@@ -210,15 +220,17 @@ export default function MemberDashboard({ user }) {
     }
   }
 
-  const resourceName = [user?.first_name, user?.last_name].filter(Boolean).join(" ") || user?.username || "Member";
+  const resourceName = viewedMember
+    ? [viewedMember.first_name, viewedMember.last_name].filter(Boolean).join(" ") || viewedMember.username || "Member"
+    : [user?.first_name, user?.last_name].filter(Boolean).join(" ") || user?.username || "Member";
   const selectedBoard = createBoards.find((board) => String(board.id) === createBoardId);
   const visibleCards = cards.filter((card) => (
-    selectedListNames === null || selectedListNames.includes(card.list_name)
+    query.trim() || dateFrom || dateTo || selectedListNames === null || selectedListNames.includes(card.list_name)
   ));
 
   return (
     <div className="app-shell">
-      <Topbar user={user} />
+      <Topbar user={user} extra={memberViewExtra} />
       <main className="page member-dashboard-page">
         <div className="member-dashboard-heading">
           <div>
@@ -236,7 +248,7 @@ export default function MemberDashboard({ user }) {
               className="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search title, board, or list"
+              placeholder="Search card number, title, board, or list"
             />
           </label>
           <label className="member-task-date">
@@ -308,7 +320,14 @@ export default function MemberDashboard({ user }) {
         {detailError && <div className="error member-dashboard-error">{detailError}</div>}
         <section className="panel member-task-resource" aria-labelledby="member-task-resource-title">
           <div className="member-task-resource-heading">
-            <h2 id="member-task-resource-title">{resourceName}</h2>
+            <h2 id="member-task-resource-title">
+              {resourceName}
+              {viewedMember?.member_category && (
+                <span className="badge" style={{ marginLeft: 8 }}>
+                  {viewedMember.member_category.charAt(0).toUpperCase() + viewedMember.member_category.slice(1)}
+                </span>
+              )}
+            </h2>
             <span className="badge">{visibleCards.length} {visibleCards.length === 1 ? "card" : "cards"}</span>
           </div>
           {loading && <div className="muted member-task-message">Loading cards...</div>}
@@ -323,6 +342,7 @@ export default function MemberDashboard({ user }) {
                 <thead>
                   <tr>
                     <th scope="col">Sr. No.</th>
+                    <th scope="col">Card Number</th>
                     <th scope="col">Board Name</th>
                     <th scope="col">List Name</th>
                     <th scope="col">Card Title</th>
@@ -334,6 +354,7 @@ export default function MemberDashboard({ user }) {
                   {visibleCards.map((card, index) => (
                     <tr key={card.id}>
                       <td>{index + 1}</td>
+                      <td><span className="badge">{card.card_uid}</span></td>
                       <td>{card.board_name}</td>
                       <td>{card.list_name}</td>
                       <td>
@@ -376,7 +397,7 @@ export default function MemberDashboard({ user }) {
         <CardModal
           card={selectedCard.card}
           board={selectedCard.board}
-          user={user}
+          user={viewedMember || user}
           error={detailError}
           onError={setDetailError}
           onClose={() => {

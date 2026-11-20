@@ -116,6 +116,7 @@ a { color: inherit; text-decoration: none; }
 }
 .top-actions { display: flex; align-items: center; gap: 10px; }
 .theme-select { min-width: 105px; width: 112px; padding: 7px 8px; font-size: 12px; }
+.member-view-select { min-width: 180px; max-width: 220px; padding: 7px 8px; font-size: 12px; }
 .nav-link { color: var(--muted); font-size: 13px; padding: 8px 10px; border-radius: 8px; }
 .nav-link:hover, .nav-link.active { background: var(--panel-2); color: var(--text); }
 
@@ -212,7 +213,7 @@ a { color: inherit; text-decoration: none; }
 .member-task-resource-heading h2 { margin: 0; font-size: 18px; }
 .member-task-message { padding: 10px 16px 18px; }
 .member-task-table-wrap { overflow-x: auto; }
-.member-task-table { width: 100%; min-width: 760px; border-collapse: collapse; text-align: left; }
+.member-task-table { width: 100%; min-width: 860px; border-collapse: collapse; text-align: left; }
 .member-task-table th, .member-task-table td { padding: 11px 12px; border-top: 1px solid var(--line); vertical-align: middle; }
 .member-task-table th { background: var(--panel-2); color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .member-task-table td { font-size: 13px; }
@@ -395,6 +396,17 @@ a { color: inherit; text-decoration: none; }
 .member-select-option { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 7px; cursor: pointer; }
 .member-select-option:hover { background: var(--panel-2); }
 .member-select-option input { margin: 0; accent-color: var(--accent); }
+.member-role-group { padding: 3px 0; }
+.member-role-group + .member-role-group { border-top: 1px solid var(--line); margin-top: 3px; padding-top: 6px; }
+.member-role-heading {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 8px 3px; color: var(--muted); font-size: 11px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.member-role-heading span {
+  min-width: 20px; text-align: center; border-radius: 999px;
+  background: var(--panel-2); padding: 2px 6px;
+}
 .member-select-empty { padding: 8px; color: var(--muted); font-size: 12px; }
 .member-filter { position: relative; }
 .member-filter-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }

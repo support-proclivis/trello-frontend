@@ -7,6 +7,12 @@ import Topbar from "../components/Topbar.jsx";
 
 const WORKSPACE_ROLES = ["workspace_admin", "board_admin", "member", "guest", "viewer"];
 const BOARD_ROLES = ["board_admin", "member", "viewer"];
+const MEMBER_CATEGORIES = [
+  { value: "", label: "Not assigned" },
+  { value: "frontend", label: "Frontend" },
+  { value: "backend", label: "Backend" },
+  { value: "tester", label: "Tester" },
+];
 
 function roleName(role) {
   return role.replaceAll("_", " ");
@@ -15,7 +21,7 @@ function roleName(role) {
 export default function Members({ user }) {
   const { id } = useParams();
   const [access, setAccess] = useState(null);
-  const [invite, setInvite] = useState({ email: "", role: "member" });
+  const [invite, setInvite] = useState({ email: "", role: "member", member_category: "" });
   const [inviteLink, setInviteLink] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -89,7 +95,7 @@ export default function Members({ user }) {
         setInviteLink(link);
         setError(`Invitation created, but the email could not be sent (${created.email_error}). Share the link below manually.`);
       }
-      setInvite({ email: "", role: "member" });
+      setInvite({ email: "", role: "member", member_category: "" });
       await load();
     } catch (e) {
       setError(e.message);
@@ -140,6 +146,18 @@ export default function Members({ user }) {
                 {sortAlphabetically(WORKSPACE_ROLES, roleName).map((role) => <option key={role} value={role}>{roleName(role)}</option>)}
               </select>
             </div>
+            <div className="field">
+              <label htmlFor="invite-member-category">Development role</label>
+              <select
+                id="invite-member-category"
+                value={invite.member_category}
+                onChange={(e) => setInvite({ ...invite, member_category: e.target.value })}
+              >
+                {MEMBER_CATEGORIES.map((category) => (
+                  <option key={category.value} value={category.value}>{category.label}</option>
+                ))}
+              </select>
+            </div>
             <button className="btn">Create invite &amp; open Gmail</button>
           </form>
           {inviteLink && (
@@ -155,7 +173,7 @@ export default function Members({ user }) {
           <div className="table-wrap">
             <table className="data-table">
               <thead>
-                <tr><th>Member</th><th>Role</th><th>Status</th><th>Actions</th></tr>
+                <tr><th>Member</th><th>Workspace role</th><th>Development role</th><th>Status</th><th>Actions</th></tr>
               </thead>
               <tbody>
                 {access.members.map((member) => {
@@ -173,6 +191,18 @@ export default function Members({ user }) {
                           onChange={(e) => updateWorkspaceMember(member.id, { role: e.target.value })}
                         >
                           {sortAlphabetically(WORKSPACE_ROLES, roleName).map((role) => <option key={role} value={role}>{roleName(role)}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <select
+                          aria-label={`Development role for ${member.email}`}
+                          className="search role-select"
+                          value={member.member_category || ""}
+                          onChange={(e) => updateWorkspaceMember(member.id, { member_category: e.target.value })}
+                        >
+                          {MEMBER_CATEGORIES.map((category) => (
+                            <option key={category.value} value={category.value}>{category.label}</option>
+                          ))}
                         </select>
                       </td>
                       <td><span className={`badge ${member.status === "active" ? "status-active" : "status-inactive"}`}>{member.status}</span></td>

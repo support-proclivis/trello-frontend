@@ -24,6 +24,7 @@ export default function Dashboard({ user }) {
   const [boardForm, setBoardForm] = useState({ name: "", description: "", background: "#0d7377" });
   const [error, setError] = useState("");
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
+  const [selectedMemberId, setSelectedMemberId] = useState("");
 
   async function load() {
     const ws = await api("/api/workspaces");
@@ -139,9 +140,53 @@ export default function Dashboard({ user }) {
     ["workspace_admin", "board_admin"].includes(ws.role),
   );
   const hasMemberWorkspaceRole = workspaces.some((ws) => ws.role === "member");
+  const viewMembers = Array.from(
+    workspaces
+      .flatMap((workspace) => (workspace.members || []).filter((member) => member.status === "active"))
+      .reduce((membersById, member) => {
+        if (!membersById.has(member.id)) membersById.set(member.id, member);
+        return membersById;
+      }, new Map())
+      .values(),
+  );
   const useMemberDashboard = workspacesLoaded
     && workspaces.length > 0
     && (hasMemberWorkspaceRole || (!hasWorkspaceAdminRole && workspaces.every((ws) => !ws.is_admin)));
+
+  if (selectedMemberId && hasWorkspaceAdminRole) {
+    const selectedMember = viewMembers.find((member) => String(member.id) === String(selectedMemberId));
+    if (selectedMember) {
+      const memberViewExtra = (
+        <select
+          className="search member-view-select"
+          aria-label="View dashboard as member"
+          title="View dashboard as member"
+          value={selectedMemberId}
+          onChange={(event) => setSelectedMemberId(event.target.value)}
+        >
+          <option value="">Admin view</option>
+          {sortAlphabetically(
+            viewMembers,
+            (member) => [member.first_name, member.last_name].filter(Boolean).join(" ") || member.username,
+          ).map((member) => (
+            <option key={member.id} value={member.id}>
+              {member.member_category
+                ? `[${member.member_category.charAt(0).toUpperCase() + member.member_category.slice(1)}] `
+                : "[Unassigned] "}
+              {[member.first_name, member.last_name].filter(Boolean).join(" ") || member.username}
+            </option>
+          ))}
+        </select>
+      );
+      return (
+        <MemberDashboard
+          user={user}
+          viewedMember={selectedMember}
+          memberViewExtra={memberViewExtra}
+        />
+      );
+    }
+  }
 
   if (useMemberDashboard) {
     return <MemberDashboard user={user} />;
@@ -150,7 +195,31 @@ export default function Dashboard({ user }) {
   if (!workspacesLoaded) {
     return (
       <div className="app-shell">
-        <Topbar user={user} />
+        <Topbar
+          user={user}
+          extra={hasWorkspaceAdminRole ? (
+            <select
+              className="search member-view-select"
+              aria-label="View dashboard as member"
+              title="View dashboard as member"
+              value={selectedMemberId}
+              onChange={(event) => setSelectedMemberId(event.target.value)}
+            >
+              <option value="">Admin view</option>
+              {sortAlphabetically(
+                viewMembers,
+                (member) => [member.first_name, member.last_name].filter(Boolean).join(" ") || member.username,
+              ).map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.member_category
+                    ? `[${member.member_category.charAt(0).toUpperCase() + member.member_category.slice(1)}] `
+                    : "[Unassigned] "}
+                  {[member.first_name, member.last_name].filter(Boolean).join(" ") || member.username}
+                </option>
+              ))}
+            </select>
+          ) : null}
+        />
         <div className="page muted">Loading workspaces...</div>
       </div>
     );
@@ -158,7 +227,31 @@ export default function Dashboard({ user }) {
 
   return (
     <div className="app-shell">
-      <Topbar user={user} />
+      <Topbar
+        user={user}
+        extra={hasWorkspaceAdminRole ? (
+          <select
+            className="search member-view-select"
+            aria-label="View dashboard as member"
+            title="View dashboard as member"
+            value={selectedMemberId}
+            onChange={(event) => setSelectedMemberId(event.target.value)}
+          >
+            <option value="">Admin view</option>
+            {sortAlphabetically(
+              viewMembers,
+              (member) => [member.first_name, member.last_name].filter(Boolean).join(" ") || member.username,
+            ).map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.member_category
+                  ? `[${member.member_category.charAt(0).toUpperCase() + member.member_category.slice(1)}] `
+                  : "[Unassigned] "}
+                {[member.first_name, member.last_name].filter(Boolean).join(" ") || member.username}
+              </option>
+            ))}
+          </select>
+        ) : null}
+      />
       <div className="page">
         <div className="h-row">
           <div>

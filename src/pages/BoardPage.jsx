@@ -6,6 +6,12 @@ import { sortAlphabetically } from "../sorting.js";
 import Topbar from "../components/Topbar.jsx";
 
 const PRIOS = ["critical", "high", "medium", "low", "none"];
+const MEMBER_ROLE_GROUPS = [
+  { value: "frontend", label: "Frontend" },
+  { value: "backend", label: "Backend" },
+  { value: "tester", label: "Tester" },
+  { value: "", label: "Unassigned" },
+];
 const LIST_DRAG_TYPE = "application/x-boardly-list";
 const EXPORT_COLUMNS = [
   { key: "card_uid", label: "Card ID" },
@@ -364,7 +370,12 @@ export default function BoardPage({ user }) {
                             : [...selected, member.id]
                         ))}
                       />
-                      <span>{member.first_name || member.username}</span>
+                      <span>
+                        {member.member_category
+                          ? `[${member.member_category.charAt(0).toUpperCase() + member.member_category.slice(1)}] `
+                          : ""}
+                        {member.first_name || member.username}
+                      </span>
                     </label>
                   ))}
                   {!board.members.length && <div className="member-filter-empty">No board members available.</div>}
@@ -1491,17 +1502,34 @@ export function CardModal({ card, board, user, error, onError, onClose, onChange
               </button>
               {showMemberOptions && (
                 <div className="member-select-options" role="listbox" aria-label="Card members" aria-multiselectable="true">
-                  {sortAlphabetically(board.members, (member) => member.first_name || member.username).map((member) => {
-                    const selected = card.members.some((item) => item.id === member.id);
+                  {MEMBER_ROLE_GROUPS.map((group) => {
+                    const groupedMembers = sortAlphabetically(
+                      board.members.filter((member) => (
+                        String(member.member_category || "").toLowerCase() === group.value
+                      )),
+                      (member) => member.first_name || member.username,
+                    );
+                    if (!groupedMembers.length) return null;
                     return (
-                      <label className="member-select-option" key={member.id}>
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          onChange={() => toggleMember(member.id)}
-                        />
-                        <span>{member.first_name || member.username}</span>
-                      </label>
+                      <div className="member-role-group" key={group.value || "unassigned"}>
+                        <div className="member-role-heading">
+                          {group.label}
+                          <span>{groupedMembers.length}</span>
+                        </div>
+                        {groupedMembers.map((member) => {
+                          const selected = card.members.some((item) => item.id === member.id);
+                          return (
+                            <label className="member-select-option" key={member.id}>
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => toggleMember(member.id)}
+                              />
+                              <span>{member.first_name || member.username}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
                     );
                   })}
                   {!board.members.length && <div className="member-select-empty">No board members available.</div>}
