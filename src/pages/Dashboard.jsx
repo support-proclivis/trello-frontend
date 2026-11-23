@@ -3,8 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { sortAlphabetically } from "../sorting.js";
+import { parseServerDate } from "../dates";
 import Topbar from "../components/Topbar.jsx";
 import MemberDashboard from "./MemberDashboard.jsx";
+import { CardModal } from "./BoardPage.jsx";
 
 export default function Dashboard({ user }) {
   const nav = useNavigate();
@@ -25,6 +27,35 @@ export default function Dashboard({ user }) {
   const [error, setError] = useState("");
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [dueTodayOpen, setDueTodayOpen] = useState(false);
+  const [dueTodayCards, setDueTodayCards] = useState([]);
+  const [dueTodayLoading, setDueTodayLoading] = useState(false);
+  const [dueTodayError, setDueTodayError] = useState("");
+  const [openingCardId, setOpeningCardId] = useState(null);
+  const [selectedCard, setSelectedCard] = useState(null);
+  const [cardDetailError, setCardDetailError] = useState("");
+
+  function istToday() {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  function displayDueDate(value) {
+    const date = parseServerDate(value);
+    if (!date || Number.isNaN(date.getTime())) return "No due date";
+    return new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }).format(date);
+  }
 
   async function load() {
     const ws = await api("/api/workspaces");
@@ -42,6 +73,74 @@ export default function Dashboard({ user }) {
       setWorkspacesLoaded(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (!dueTodayOpen) return;
+    let active = true;
+    const today = istToday();
+    setDueTodayLoading(true);
+    setDueTodayError("");
+    api(`/api/member-dashboard/cards?due_date_from=${today}&due_date_to=${today}&include_excluded_lists=true`)
+      .then((cards) => {
+        if (active) {
+          setDueTodayCards(cards.filter((card) =>
+            card.status !== "done" && card.due_state === "today"
+          ));
+        }
+      })
+      .catch((e) => {
+        if (active) setDueTodayError(e.message);
+      })
+      .finally(() => {
+        if (active) setDueTodayLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [dueTodayOpen]);
+
+  async function loadDueTodayCard(boardId, cardId) {
+    const board = await api(`/api/boards/${boardId}`);
+    const card = board.lists.flatMap((list) => list.cards).find((item) => item.id === cardId);
+    if (!card) throw new Error("This card is no longer available.");
+    setSelectedCard({ board, card });
+  }
+
+  async function openDueTodayCard(card) {
+    setOpeningCardId(card.id);
+    setCardDetailError("");
+    try {
+      await loadDueTodayCard(card.board_id, card.id);
+    } catch (e) {
+      setCardDetailError(e.message);
+    } finally {
+      setOpeningCardId(null);
+    }
+  }
+
+  async function refreshDueTodayCard() {
+    if (!selectedCard) return;
+    try {
+      await loadDueTodayCard(selectedCard.board.id, selectedCard.card.id);
+      const today = istToday();
+      const cards = await api(
+        `/api/member-dashboard/cards?due_date_from=${today}&due_date_to=${today}&include_excluded_lists=true`,
+      );
+      setDueTodayCards(cards.filter((card) =>
+        card.status !== "done" && card.due_state === "today"
+      ));
+    } catch (e) {
+      setCardDetailError(e.message);
+    }
+  }
+
+  async function archiveDueTodayCard() {
+    if (!selectedCard) return;
+    await api(`/api/cards/${selectedCard.card.id}/archive`, { method: "POST" });
+    setSelectedCard(null);
+    setCardDetailError("");
+    setDueTodayCards((cards) => cards.filter((card) => card.id !== selectedCard.card.id));
+  }
 
   async function createWorkspace(e) {
     e.preventDefault();
@@ -139,6 +238,7 @@ export default function Dashboard({ user }) {
   const hasWorkspaceAdminRole = workspaces.some((ws) =>
     ["workspace_admin", "board_admin"].includes(ws.role),
   );
+  const isAdminDashboard = workspaces.some((ws) => ws.is_admin);
   const hasMemberWorkspaceRole = workspaces.some((ws) => ws.role === "member");
   const viewMembers = Array.from(
     workspaces
@@ -153,16 +253,25 @@ export default function Dashboard({ user }) {
     && workspaces.length > 0
     && (hasMemberWorkspaceRole || (!hasWorkspaceAdminRole && workspaces.every((ws) => !ws.is_admin)));
 
-  if (selectedMemberId && hasWorkspaceAdminRole) {
-    const selectedMember = viewMembers.find((member) => String(member.id) === String(selectedMemberId));
-    if (selectedMember) {
-      const memberViewExtra = (
+  if (dueTodayOpen) {
+    const memberViewExtra = isAdminDashboard ? (
+      <>
+        <button
+          type="button"
+          className="nav-link top-due-button"
+          onClick={() => setDueTodayOpen(false)}
+        >
+          Back to dashboard
+        </button>
         <select
           className="search member-view-select"
           aria-label="View dashboard as member"
           title="View dashboard as member"
-          value={selectedMemberId}
-          onChange={(event) => setSelectedMemberId(event.target.value)}
+          value=""
+          onChange={(event) => {
+            if (event.target.value) setSelectedMemberId(event.target.value);
+            setDueTodayOpen(false);
+          }}
         >
           <option value="">Admin view</option>
           {sortAlphabetically(
@@ -177,59 +286,139 @@ export default function Dashboard({ user }) {
             </option>
           ))}
         </select>
-      );
-      return (
-        <MemberDashboard
-          user={user}
-          viewedMember={selectedMember}
-          memberViewExtra={memberViewExtra}
-        />
-      );
-    }
-  }
+      </>
+    ) : null;
 
-  if (useMemberDashboard) {
-    return <MemberDashboard user={user} />;
-  }
-
-  if (!workspacesLoaded) {
     return (
       <div className="app-shell">
         <Topbar
           user={user}
-          extra={hasWorkspaceAdminRole ? (
-            <select
-              className="search member-view-select"
-              aria-label="View dashboard as member"
-              title="View dashboard as member"
-              value={selectedMemberId}
-              onChange={(event) => setSelectedMemberId(event.target.value)}
-            >
-              <option value="">Admin view</option>
-              {sortAlphabetically(
-                viewMembers,
-                (member) => [member.first_name, member.last_name].filter(Boolean).join(" ") || member.username,
-              ).map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.member_category
-                    ? `[${member.member_category.charAt(0).toUpperCase() + member.member_category.slice(1)}] `
-                    : "[Unassigned] "}
-                  {[member.first_name, member.last_name].filter(Boolean).join(" ") || member.username}
-                </option>
-              ))}
-            </select>
-          ) : null}
+          extra={memberViewExtra}
         />
-        <div className="page muted">Loading workspaces...</div>
+        <main className="page member-dashboard-page">
+          <div className="member-dashboard-heading">
+            <div>
+              <h1>Due Today</h1>
+              <p className="muted">All cards due today across your administered workspaces.</p>
+            </div>
+          </div>
+          {dueTodayError && <div className="error member-dashboard-error">{dueTodayError}</div>}
+          <section className="panel member-task-resource" aria-labelledby="due-today-title">
+            <div className="member-task-resource-heading">
+              <h2 id="due-today-title">Cards due today</h2>
+              <span className="badge">
+                {dueTodayCards.length} {dueTodayCards.length === 1 ? "card" : "cards"}
+              </span>
+            </div>
+            {dueTodayLoading && <div className="muted member-task-message">Loading cards...</div>}
+            {!dueTodayLoading && !dueTodayError && !dueTodayCards.length && (
+              <div className="muted member-task-message">No cards are due today.</div>
+            )}
+            {!!dueTodayCards.length && (
+              <div className="member-task-table-wrap">
+                <table className="member-task-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Sr. No.</th>
+                      <th scope="col">Card Number</th>
+                      <th scope="col">Workspace</th>
+                      <th scope="col">Board Name</th>
+                      <th scope="col">List Name</th>
+                      <th scope="col">Member Name</th>
+                      <th scope="col">Card Title</th>
+                      <th scope="col">Due Date</th>
+                      <th scope="col">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dueTodayCards.map((card, index) => (
+                      <tr key={card.id}>
+                        <td>{index + 1}</td>
+                        <td><span className="badge">{card.card_uid}</span></td>
+                        <td>{card.workspace_name || "-"}</td>
+                        <td>{card.board_name}</td>
+                        <td>{card.list_name}</td>
+                        <td>{card.member_name || "Unassigned"}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="member-task-title"
+                            onClick={() => openDueTodayCard(card)}
+                            disabled={openingCardId === card.id}
+                          >
+                            {card.title}
+                          </button>
+                        </td>
+                        <td>
+                          <span className="badge member-task-due is-today">
+                            Today · {displayDueDate(card.due_date)}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn small"
+                            onClick={() => openDueTodayCard(card)}
+                            disabled={openingCardId === card.id}
+                          >
+                            {openingCardId === card.id ? "Opening..." : "View Card Details"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </main>
+        {selectedCard && (
+          <CardModal
+            card={selectedCard.card}
+            board={selectedCard.board}
+            user={user}
+            error={cardDetailError}
+            onError={setCardDetailError}
+            onClose={() => {
+              setSelectedCard(null);
+              setCardDetailError("");
+            }}
+            onChange={refreshDueTodayCard}
+            onArchive={archiveDueTodayCard}
+            onTransferComplete={() => {
+              setSelectedCard(null);
+              setCardDetailError("");
+              void (async () => {
+                const today = istToday();
+                const cards = await api(
+                  `/api/member-dashboard/cards?due_date_from=${today}&due_date_to=${today}&include_excluded_lists=true`,
+                );
+                setDueTodayCards(cards.filter((item) =>
+                  item.status !== "done" && item.due_state === "today"
+                ));
+              })();
+            }}
+            showStatus
+          />
+        )}
       </div>
     );
   }
 
-  return (
-    <div className="app-shell">
-      <Topbar
-        user={user}
-        extra={hasWorkspaceAdminRole ? (
+  if (selectedMemberId && hasWorkspaceAdminRole) {
+    const selectedMember = viewMembers.find((member) => String(member.id) === String(selectedMemberId));
+    if (selectedMember) {
+      const memberViewExtra = (
+        <>
+          {isAdminDashboard && (
+            <button
+              type="button"
+              className="nav-link top-due-button"
+              onClick={() => setDueTodayOpen(true)}
+            >
+              Due Today
+            </button>
+          )}
           <select
             className="search member-view-select"
             aria-label="View dashboard as member"
@@ -250,6 +439,98 @@ export default function Dashboard({ user }) {
               </option>
             ))}
           </select>
+        </>
+      );
+      return (
+        <MemberDashboard
+          user={user}
+          viewedMember={selectedMember}
+          memberViewExtra={memberViewExtra}
+        />
+      );
+    }
+  }
+
+  if (useMemberDashboard) {
+    return <MemberDashboard user={user} />;
+  }
+
+  if (!workspacesLoaded) {
+    return (
+      <div className="app-shell">
+        <Topbar
+          user={user}
+          extra={isAdminDashboard ? (
+            <>
+              <button
+                type="button"
+                className="nav-link top-due-button"
+                onClick={() => setDueTodayOpen(true)}
+              >
+                Due Today
+              </button>
+              <select
+                className="search member-view-select"
+                aria-label="View dashboard as member"
+                title="View dashboard as member"
+                value={selectedMemberId}
+                onChange={(event) => setSelectedMemberId(event.target.value)}
+              >
+                <option value="">Admin view</option>
+                {sortAlphabetically(
+                  viewMembers,
+                  (member) => [member.first_name, member.last_name].filter(Boolean).join(" ") || member.username,
+                ).map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.member_category
+                      ? `[${member.member_category.charAt(0).toUpperCase() + member.member_category.slice(1)}] `
+                      : "[Unassigned] "}
+                    {[member.first_name, member.last_name].filter(Boolean).join(" ") || member.username}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
+        />
+        <div className="page muted">Loading workspaces...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <Topbar
+        user={user}
+        extra={isAdminDashboard ? (
+          <>
+            <button
+              type="button"
+              className="nav-link top-due-button"
+              onClick={() => setDueTodayOpen(true)}
+            >
+              Due Today
+            </button>
+            <select
+              className="search member-view-select"
+              aria-label="View dashboard as member"
+              title="View dashboard as member"
+              value={selectedMemberId}
+              onChange={(event) => setSelectedMemberId(event.target.value)}
+            >
+              <option value="">Admin view</option>
+              {sortAlphabetically(
+                viewMembers,
+                (member) => [member.first_name, member.last_name].filter(Boolean).join(" ") || member.username,
+              ).map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.member_category
+                    ? `[${member.member_category.charAt(0).toUpperCase() + member.member_category.slice(1)}] `
+                    : "[Unassigned] "}
+                  {[member.first_name, member.last_name].filter(Boolean).join(" ") || member.username}
+                </option>
+              ))}
+            </select>
+          </>
         ) : null}
       />
       <div className="page">

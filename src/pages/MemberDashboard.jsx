@@ -49,6 +49,7 @@ export default function MemberDashboard({ user, viewedMember = null, memberViewE
   const [createListId, setCreateListId] = useState("");
   const [newCardTitle, setNewCardTitle] = useState("");
   const [newCardDescription, setNewCardDescription] = useState("");
+  const [newCardDueDate, setNewCardDueDate] = useState("");
   const [createCardError, setCreateCardError] = useState("");
   const [creatingCard, setCreatingCard] = useState(false);
   const includeExcludedLists = (selectedListNames || []).some((name) => (
@@ -173,6 +174,7 @@ export default function MemberDashboard({ user, viewedMember = null, memberViewE
     setCreateListId("");
     setNewCardTitle("");
     setNewCardDescription("");
+    setNewCardDueDate("");
     try {
       const params = viewedMember?.id
         ? `?view_as_member_id=${encodeURIComponent(viewedMember.id)}`
@@ -191,7 +193,7 @@ export default function MemberDashboard({ user, viewedMember = null, memberViewE
 
   async function createCard(event) {
     event.preventDefault();
-    if (!newCardTitle.trim() || !createListId || creatingCard) return;
+    if (!newCardTitle.trim() || !createListId || !newCardDueDate || creatingCard) return;
     setCreatingCard(true);
     setCreateCardError("");
     let createdCard;
@@ -201,6 +203,7 @@ export default function MemberDashboard({ user, viewedMember = null, memberViewE
         body: JSON.stringify({
           title: newCardTitle.trim(),
           description: newCardDescription,
+          due_date: new Date(newCardDueDate).toISOString(),
           list_id: Number(createListId),
         }),
       });
@@ -485,11 +488,21 @@ export default function MemberDashboard({ user, viewedMember = null, memberViewE
                     onChange={(event) => setNewCardDescription(event.target.value)}
                   />
                 </div>
+                <div className="field">
+                  <label htmlFor="member-create-due-date">Due date</label>
+                  <input
+                    id="member-create-due-date"
+                    type="datetime-local"
+                    value={newCardDueDate}
+                    onChange={(event) => setNewCardDueDate(event.target.value)}
+                    required
+                  />
+                </div>
                 <div className="workspace-card-search-actions">
                   <button
                     type="submit"
                     className="btn"
-                    disabled={creatingCard || !newCardTitle.trim() || !createListId}
+                    disabled={creatingCard || !newCardTitle.trim() || !createListId || !newCardDueDate}
                   >
                     {creatingCard ? "Creating..." : "Create card"}
                   </button>

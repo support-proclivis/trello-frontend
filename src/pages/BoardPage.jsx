@@ -293,9 +293,16 @@ export default function BoardPage({ user }) {
     }
   }
 
-  async function addCard(listId, title) {
-    if (!title.trim()) return;
-    await api("/api/cards", { method: "POST", body: JSON.stringify({ title, list_id: listId }) });
+  async function addCard(listId, title, dueDate) {
+    if (!title.trim() || !dueDate) return;
+    await api("/api/cards", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        list_id: listId,
+        due_date: new Date(dueDate).toISOString(),
+      }),
+    });
     load();
   }
 
@@ -453,7 +460,7 @@ export default function BoardPage({ user }) {
               }}
               onListDragOver={() => setDragOverListId(list.id)}
               onListDrop={(draggedListId, afterTarget) => dropList(draggedListId, list.id, afterTarget)}
-              onAdd={(t) => addCard(list.id, t)}
+              onAdd={(t, due) => addCard(list.id, t, due)}
               onOpen={setCard}
               onToggleCompletion={toggleCardCompletion}
               onDropCard={(cardId) => moveCard(cardId, list.id)}
@@ -863,6 +870,7 @@ function ListColumn({
   onReorder,
 }) {
   const [title, setTitle] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [name, setName] = useState(list.name);
   const [editing, setEditing] = useState(false);
   const [sortOrder, setSortOrder] = useState("due-priority");
@@ -1061,11 +1069,32 @@ function ListColumn({
         })}
       </div>
       <form
-        onSubmit={(e) => { e.preventDefault(); onAdd(title); setTitle(""); }}
-        style={{ display: "flex", gap: 6, marginTop: 8 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!title.trim() || !dueDate) return;
+          onAdd(title, dueDate);
+          setTitle("");
+          setDueDate("");
+        }}
+        style={{ display: "grid", gap: 6, marginTop: 8 }}
       >
-        <input className="search" style={{ flex: 1, minWidth: 0 }} placeholder="Add a card" value={title} onChange={(e) => setTitle(e.target.value)} />
-        <button className="btn small">Add</button>
+        <input
+          className="search"
+          style={{ width: "100%" }}
+          placeholder="Add a card"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          required
+        />
+        <input
+          className="search"
+          type="datetime-local"
+          aria-label="Due date"
+          value={dueDate}
+          onChange={(e) => setDueDate(e.target.value)}
+          required
+        />
+        <button className="btn small" disabled={!title.trim() || !dueDate}>Add</button>
       </form>
     </section>
   );
@@ -1465,6 +1494,8 @@ export function CardModal({ card, board, user, error, onError, onClose, onChange
               className="search"
               type="datetime-local"
               value={due}
+              disabled={!board.can_manage_archived_cards}
+              title={board.can_manage_archived_cards ? "Change due date" : "Only admins can change the due date"}
               onChange={(e) => {
                 const nextDue = e.target.value;
                 if (nextDue && nextDue.slice(0, 10) !== due.slice(0, 10)) {
